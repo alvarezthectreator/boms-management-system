@@ -1,0 +1,152 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Boms Apartment</title>
+<link href="https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root{--out:#E9EDEB;--page:#F7F8F7;--card:#fff;--ink:#1B1D1C;--mute:#7B817D;--line:#ECEFED;--lime:#EBF78F;--limeink:#2A3004;--mint:#DDF5E8;--mintink:#1D5A3E;--tint:#F5F7F6;--red:#E5484D;--redbg:#FDE8E8;--redink:#B3261E;--ph:#E6EBE7;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}*{box-sizing:border-box}
+body{margin:0;background:var(--out);color:var(--ink);font:400 14px/1.5 Lexend,system-ui,sans-serif}
+.app{max-width:1280px;margin:20px auto;background:var(--page);border-radius:24px;overflow:hidden;display:grid;grid-template-columns:240px 1fr;min-height:760px;box-shadow:0 0 0 8px color-mix(in srgb,var(--card) 60%,transparent)}
+.side{background:var(--card);padding:24px 16px;display:flex;flex-direction:column;gap:4px}
+.logo{display:flex;align-items:center;gap:10px;font-size:19px;font-weight:500;padding:0 8px 22px}
+.logo i{width:26px;height:26px;display:grid;grid-template-columns:1fr 1fr;gap:3px}.logo i b{background:var(--lime);border-radius:3px}.logo i b:nth-child(2){background:var(--mint)}.logo i b:nth-child(3){background:var(--mint)}
+.nv{display:flex;align-items:center;gap:12px;padding:11px 12px;border:0;background:none;border-radius:10px;color:var(--mute);font:400 15px Lexend,sans-serif;cursor:pointer;text-align:left;width:100%}
+.nv.on{background:var(--lime);color:var(--limeink);font-weight:500}.nv:hover:not(.on){background:var(--tint)}
+.nv em{margin-left:auto;background:var(--red);color:#fff;font-style:normal;font-size:11px;border-radius:99px;min-width:20px;height:20px;display:grid;place-items:center}
+.promo{margin-top:auto;background:var(--mint);border-radius:16px;padding:14px;color:var(--mintink)}
+.promo b{display:block;font-size:15px;font-weight:500;margin:6px 0 4px;color:var(--ink)}.promo p{margin:0 0 10px;font-size:11px}
+.btn{border:0;background:var(--lime);color:var(--limeink);font:500 13px Lexend,sans-serif;padding:8px 14px;border-radius:8px;cursor:pointer}
+.btn.g{background:var(--tint);color:var(--ink)}.btn.r{background:var(--redbg);color:var(--redink)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+main{padding:22px 28px;min-width:0}
+.top{display:flex;align-items:center;gap:12px;margin-bottom:20px}.top h1{margin:0;font-size:26px;font-weight:500;letter-spacing:-.01em}
+.top .bc{color:var(--mute);font-size:13px}.top .bc b{font-weight:400;color:#9BB52A}
+.ib{width:40px;height:40px;border:0;border-radius:10px;background:var(--card);display:grid;place-items:center;color:var(--ink);cursor:pointer;position:relative}
+.ib.dot::after{content:"";position:absolute;top:8px;right:9px;width:8px;height:8px;border-radius:50%;background:var(--red)}
+.sp{margin-left:auto;display:flex;align-items:center;gap:12px}.me{display:flex;align-items:center;gap:10px;line-height:1.25}.me small{color:var(--mute);font-size:12px;display:block}
+.av{width:40px;height:40px;border-radius:50%;background:var(--lime);color:var(--limeink);display:grid;place-items:center;font-weight:500;flex:none}.av.s{width:34px;height:34px;font-size:12px}.av.l{width:84px;height:84px;font-size:26px}
+.card{background:var(--card);border-radius:16px;padding:20px;margin-bottom:16px}
+.card h2{margin:0;font-size:17px;font-weight:400}.hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.gp{display:grid;grid-template-columns:minmax(250px,.85fr) 2.1fr;gap:16px}
+.bk{display:grid;grid-template-columns:1.8fr 1fr;gap:18px}@media(max-width:1100px){.bk{grid-template-columns:1fr}}
+.f{display:grid;grid-template-columns:repeat(3,1fr);gap:14px 12px;margin:14px 0}.f2{grid-template-columns:repeat(2,1fr)}
+.l{color:var(--mute);font-size:12px}.v{font-size:14px}.v small{color:var(--mute)}
+hr{border:0;border-top:1px solid var(--line);margin:16px 0}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--mint);color:var(--mintink);border-radius:6px;padding:2px 10px;font-size:12px}
+.chip.y{background:var(--lime);color:var(--limeink)}.chip.x{background:var(--redbg);color:var(--redink)}
+.ct{display:flex;align-items:center;gap:10px;margin:8px 0}.ct span{width:30px;height:30px;border-radius:8px;background:var(--mint);color:var(--mintink);display:grid;place-items:center}
+.big{font-size:26px;font-weight:400;margin:4px 0}
+.ri{background:var(--tint);border-radius:14px;padding:16px}.ph{background:var(--ph);border-radius:10px;display:grid;place-items:center;color:var(--mute)}
+.ln{display:flex;justify-content:space-between;padding:4px 0;color:var(--mute)}.ln b{font-weight:400;color:var(--ink)}.ln.t{color:var(--ink);font-size:16px;margin-top:4px}
+.ck{display:flex;gap:8px;align-items:center;font-size:13px}.ck svg{color:#8FB021}
+.tb{background:var(--mint);border-radius:10px;display:grid;grid-template-columns:70px 1.1fr 1.2fr 1fr 1fr 1.1fr 1.1fr .9fr 30px;padding:12px 14px;color:var(--mute);font-size:13px;gap:8px}
+.tr{display:grid;grid-template-columns:70px 1.1fr 1.2fr 1fr 1fr 1.1fr 1.1fr .9fr 30px;padding:12px 14px;gap:8px;align-items:center;border-bottom:1px solid var(--line)}.tr:last-child{border:0}
+.tw{overflow-x:auto}.tw>div{min-width:860px}
+.in{display:flex;align-items:center;gap:8px;background:var(--tint);border-radius:10px;padding:0 12px;height:40px;flex:1;color:var(--mute)}.in input{border:0;background:none;color:var(--ink);font:400 13px Lexend,sans-serif;flex:1;min-width:0}.in input:focus-visible{outline:0}
+.rm{display:grid;grid-template-columns:150px 1fr auto;gap:16px;border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:12px;cursor:pointer;background:var(--card);width:100%;text-align:left;color:var(--ink);font:400 14px Lexend,sans-serif}
+.rm.on{background:var(--tint);border-color:var(--lime)}.rm h3{margin:0;font-size:20px;font-weight:400}.rm p{margin:6px 0;color:var(--mute);font-size:12px}.sm{display:flex;gap:14px;color:var(--mute);font-size:12px}
+.rms{display:grid;grid-template-columns:1.55fr 1fr;gap:16px}@media(max-width:1100px){.rms{grid-template-columns:1fr}}
+.pr{font-size:20px;align-self:end}.pr small{color:var(--mute);font-size:12px}
+.rv{display:grid;grid-template-columns:1.6fr 1fr;gap:16px}@media(max-width:1000px){.rv{grid-template-columns:1fr}}
+.ch{display:flex;align-items:flex-end;gap:14px;height:150px;border-bottom:1px solid var(--line);padding:0 8px}.ch div{flex:1;display:flex;align-items:flex-end;justify-content:center;gap:4px;height:100%}.ch i{width:14px;border-radius:3px 3px 0 0;background:var(--mint)}.ch i+i{background:var(--lime)}
+.bar{margin:8px 0}.bar span{display:flex;justify-content:space-between;font-size:12px;color:var(--mute)}.bar i{display:block;height:6px;border-radius:3px;background:var(--line);margin-top:3px;overflow:hidden}.bar i b{display:block;height:100%;background:var(--mint);filter:saturate(2)}
+.rt{background:var(--lime);color:var(--limeink);border-radius:10px;padding:10px;text-align:center;font-size:18px}
+.rc{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}.rc>div{background:var(--tint);border-radius:12px;padding:14px;font-size:12px;color:var(--mute)}.rc .n{display:flex;align-items:center;gap:8px;color:var(--ink);font-size:13px;margin-bottom:6px}
+.st{color:#E5B000;letter-spacing:2px}
+@media(max-width:900px){.app{grid-template-columns:1fr;margin:0;border-radius:0}.side{flex-direction:row;overflow-x:auto;padding:10px}.logo,.promo{display:none}.nv{width:auto;white-space:nowrap}.gp{grid-template-columns:1fr}main{padding:16px}.me div{display:none}}
+.gr{display:grid;grid-template-columns:repeat(var(--n,4),1fr);gap:16px;margin-bottom:16px}.gr>.card{margin:0}@media(max-width:900px){.gr{grid-template-columns:1fr 1fr}}
+.ch.one i{background:var(--lime)}.ch i.m{background:var(--mint)}
+.ms{display:grid;grid-template-columns:320px 1fr;min-height:540px}@media(max-width:900px){.ms{grid-template-columns:1fr}}
+.cv{display:flex;gap:10px;padding:10px;border-radius:12px;align-items:center;cursor:pointer}.cv.on{background:var(--tint)}.cv small{color:var(--mute);display:block;font-size:12px}
+.bb{max-width:70%;padding:10px 14px;border-radius:14px;background:var(--tint);margin:6px 0}.bb.me{background:var(--lime);color:var(--limeink);margin-left:auto}
+.cl{display:grid;grid-template-columns:repeat(7,1fr);min-width:700px}.cl>div{min-height:92px;border:1px solid var(--line);padding:6px;font-size:12px;color:var(--mute)}.cl>.h{min-height:0;background:var(--mint);color:var(--mintink);text-align:center;padding:8px}.cl .chip{display:block;margin-top:4px;font-size:11px;padding:1px 6px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+</style></head><body><div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script>
+const e=React.createElement,{useState}=React;
+const P={dash:"M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",cal:"M5 5h14v15H5zM5 10h14M9 3v4M15 3v4",home:"M4 11l8-7 8 7v9H4zM10 20v-6h4v6",msg:"M4 5h16v11H9l-5 4z",hk:"M9 3h6v4H9zM6 7h12l1 13H5z",box:"M12 3l8 4v10l-8 4-8-4V7zM4 7l8 4 8-4M12 11v10",cash:"M3 7h18v10H3zM12 9.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5",star:"M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z",usr:"M5 4h14v16H5zM12 11a2 2 0 100-4 2 2 0 000 4M8 17c1-3 7-3 8 0",gear:"M12 9a3 3 0 100 6 3 3 0 000-6M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1",bell:"M6 16V11a6 6 0 0112 0v5l2 2H4zM10 20h4",back:"M15 5l-7 7 7 7",ph:"M6 3h4l2 5-2.5 1.5a11 11 0 005 5L16 12l5 2v4a2 2 0 01-2 2A16 16 0 014 5a2 2 0 012-2",mail:"M3 6h18v12H3zM3 7l9 7 9-7",srch:"M11 4a7 7 0 100 14 7 7 0 000-14M16 16l5 5",ok:"M5 12l5 5 9-10",bed:"M3 18V8M3 14h18v4M21 14v-3a3 3 0 00-3-3h-7v6"};
+const I=(n,s=20)=>e('svg',{width:s,height:s,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.6,strokeLinecap:'round',strokeLinejoin:'round','aria-hidden':true},e('path',{d:P[n]}));
+const mk=t=>(c,...k)=>{let p={className:c};if(k[0]&&k[0].constructor===Object&&!k[0].$$typeof)p={...p,...k.shift()};return e(t,p,...k)};
+const D=mk('div'),Sp=mk('span'),N=n=>'₦'+n.toLocaleString('en-NG');
+const NAV=[['dash','Dashboard','dash'],['res','Reservation','cal'],['rooms','Rooms','home'],['msg','Messages','msg',5],['hk','Housekeeping','hk'],['inv','Inventory','box'],['cal','Calendar','cal'],['fin','Financials','cash'],['rev','Reviews','star'],['con','Concierge','usr']];
+const ROOMS=[{n:'Studio',m:'25 m²',b:'Queen bed',g:2,d:'Comfortable, affordable stay for solo travellers or couples. Kitchenette, work desk and essential amenities.',a:'22/30 units',p:45000,s:'Occupied'},{n:'1-Bedroom',m:'40 m²',b:'King bed',g:2,d:'Separate bedroom and living area with a full kitchen. Ideal for business trips and longer stays.',a:'18/25 units',p:70000,s:'Available'},{n:'2-Bedroom',m:'65 m²',b:'King + twin',g:4,d:'Two bedrooms, spacious lounge and dining area. Perfect for families and small groups.',a:'8/10 units',p:110000,s:'Available'},{n:'Executive',m:'50 m²',b:'King bed',g:3,d:'Premium finishes, large work desk and city views, with a fully fitted kitchen and lounge.',a:'12/15 units',p:150000,s:'Occupied'},{n:'Penthouse',m:'110 m²',b:'2 king beds',g:6,d:'Top-floor residence with a private terrace, three bathrooms and dedicated concierge.',a:'3/4 units',p:250000,s:'Available'}];
+const REV=[['Johan Manulang','JM',5,'Fantastic stay. The apartment was spotless, the staff were helpful and the location is perfect for work trips.'],['Suzi Matsuda','SM',4,'Cosy and well kept. Breakfast could offer more variety, but overall a very good experience.'],['Donnie Wong','DW',3,'Comfortable bed, but the air conditioning in my unit was not working properly at night.'],['Isla de Lacosta','IL',5,'Amazing service and a beautiful building. The team made our long stay feel like home.']];
+function Shell({page,go,children,title,crumb,back}){return D('app',
+ e('nav',{className:'side','aria-label':'Main'},D('logo',e('i',null,e('b'),e('b'),e('b'),e('b')),'Boms Apartment'),
+  NAV.map(([k,l,ic,b])=>e('button',{key:k,className:'nv'+(page==k?' on':''),onClick:()=>go(k)},I(ic),l,b?e('em',null,b):null)),
+  D('promo',I('dash',28),e('b',null,'Elevate Hospitality Standards'),e('p',null,'Enhanced reporting, faster check-ins and integrated marketing tools'),e('button',{className:'btn'},'Update now'))),
+ e('main',null,D('top',back?e('button',{className:'ib','aria-label':'Back',onClick:back},I('back')):null,D('',e('h1',null,title),crumb?D('bc',e('b',null,crumb[0]),' / ',crumb[1]):null),
+  D('sp',D('me',D('av','BA'),D('',D('','Bola Adeyemi'),e('small',null,'Admin'))),e('button',{className:'ib','aria-label':'Settings'},I('gear')),e('button',{className:'ib dot','aria-label':'Notifications'},I('bell')))),children))}
+const F=(l,v)=>D('',D('l',l),D('v',v));
+function Guest({go}){const [x,setX]=useState(false),nights=3,rate=150000,room=nights*rate,vat=room*.075,svc=room*.05;
+ const hist=[['BA-B00109','June 09, 2026','Deluxe','Room 101','June 19, 2026','June 21, 2026','2 guests'],['BA-B00085','March 20, 2026','Penthouse','Unit 305','March 25, 2026','March 30, 2026','1 guest']];
+ return e(Shell,{page:'res',go,title:'Guest profile',crumb:['Reservation','Guest profile'],back:()=>go('dash')},
+ D('gp',
+  D('card',D('hd',e('h2',null,'Profile')),D('',D('',e('div',{style:{display:'flex',gap:14,alignItems:'center'}},D('av l','CO'),D('',D('big','Chidi Okafor'),D('l','G011-987654321')))),
+   hr(),D('ct',Sp('',I('ph',16)),'+234 803 789 1234'),D('ct',Sp('',I('mail',16)),'chidi.okafor@example.com'),hr(),
+   e('h2',{style:{fontSize:16}},'Personal information'),D('f f2',F('Date of birth','June 15, 1985'),F('Gender','Male'),F('Nationality','Nigerian'),F('ID number','A12345678')),hr(),
+   e('h2',{style:{fontSize:16}},'Loyalty programme'),D('f f2',F('Membership status',Sp('chip y','Platinum member')),F('Tier level','Elite'),F('Points balance','15,000 points')))),
+  D('card',D('hd',e('h2',null,'Booking info')),D('bk',
+   D('',Sp(x?'chip x':'chip',x?'Booking cancelled':[I('ok',13),' Booking confirmed']),D('big',{style:{fontSize:28}},'Booking ID: ',e('b',{style:{fontWeight:500}},'BA-B00109')),D('l','June 17, 2026, 9:46 AM'),
+    D('f',F('Room type','Deluxe'),F('Room number','101'),F('Price',[N(rate),e('small',{key:1},'/night')]),F('Guests','2 adults'),F('Requests','Late check-out'),F('','')),
+    D('f',F('Check-in',['June 19, 2026',D('l',{key:1},'1:45 PM')]),F('Check-out',['June 22, 2026',D('l',{key:1},'11:45 AM')]),F('Duration','3 nights')),
+    F('Notes','Guest requested extra pillows and towels. Ensure room service is available on arrival.'),hr(),
+    D('f',F('Loyalty programme','Platinum member'),D('',D('l','Special amenities'),['Complimentary breakfast','Free Wi-Fi','Access to gym and pool'].map(t=>D('ck',{key:t},I('ok',14),t))),F('Extras','-')),
+    F('Transportation','Airport pickup arranged'),
+    D('',{style:{display:'flex',gap:8,justifyContent:'flex-end',marginTop:14}},e('button',{className:'btn g',onClick:()=>alert('Edit booking is part of the full build.')},'Edit'),e('button',{className:'btn r',onClick:()=>setX(!x)},x?'Restore booking':'Cancel booking'))),
+   D('ri',D('hd',e('h2',null,'Room info'),D('l','View detail')),D('ph',{style:{height:150}},I('bed',44)),D('sm',{style:{display:'flex',gap:12,margin:'10px 0',color:'var(--mute)',fontSize:12}},'35 m²','King bed','2 guests'),hr(),
+    D('hd',e('h2',{style:{fontSize:16}},'Price summary'),Sp(x?'chip x':'chip y',x?'Refund due':'Paid')),
+    D('ln','Room and offer',e('b',null,N(room))),D('ln','Extras',e('b',null,N(0))),D('ln','7.5% VAT',e('b',null,N(vat))),D('ln','5% service charge',e('b',null,N(svc))),D('ln t','Total price',e('b',{style:{fontWeight:500}},N(room+vat+svc))),
+    D('l',{style:{marginTop:12}},'Notes'),D('v',{style:{fontSize:13}},'Invoice sent to corporate account; payment confirmed by BIG Corporation'))))),
+ D('card',D('hd',e('h2',null,'Booking history'),D('',{style:{display:'flex',gap:10,flex:'0 1 420px'}},D('in',I('srch',16),e('input',{placeholder:'Search guest, status, etc','aria-label':'Search bookings'})),D('in',{style:{flex:'0 0 auto'}},'19 - 24 June, 2026'))),
+  D('tw',D('',D('tb',...['Image','Booking ID','Booking date','Room type','Room number','Check-in','Check-out','Guests',''].map((h,i)=>D('',{key:i},h))),
+   hist.map((r,i)=>D('tr',{key:i},D('ph',{style:{width:56,height:40}},I('bed',20)),r[0],r[1],D('',Sp('chip y',r[2])),r[3],r[4],r[5],r[6],D('l','⋯')))))));}
+const hr=()=>e('hr');
+function Rooms({go}){const [i,setI]=useState(1),r=ROOMS[i];
+ return e(Shell,{page:'rooms',go,title:'Rooms'},D('card',D('hd',{style:{gap:10,display:'flex'}},D('in',I('srch',16),e('input',{placeholder:'Search room type, number, etc','aria-label':'Search rooms'})),e('button',{className:'btn'},'Add room')),
+ D('rms',D('',ROOMS.map((x,k)=>e('button',{key:k,className:'rm'+(k==i?' on':''),onClick:()=>setI(k)},D('ph',{style:{height:110}},I('bed',36)),D('',D('',{style:{display:'flex',justifyContent:'space-between'}},e('h3',null,x.n),Sp(x.s=='Available'?'chip':'chip y',x.s)),D('sm',x.m,x.b,x.g+' guests'),e('p',null,x.d),D('l','Availability: ',x.a)),D('pr',N(x.p),e('small',null,'/night')))
+ )),
+ D('ri',{style:{alignSelf:'start'}},D('hd',e('h2',null,'Room detail'),e('button',{className:'btn'},'Edit')),D('',{style:{display:'flex',gap:8,alignItems:'center'}},D('big',{style:{fontSize:24}},r.n),Sp(r.s=='Available'?'chip':'chip y',r.s)),D('l','Occupied: ',r.a),D('ph',{style:{height:170,margin:'12px 0'}},I('bed',56)),D('sm',r.m,r.b,r.g+' guests'),e('p',{style:{color:'var(--mute)',fontSize:13}},r.d),
+  e('h2',{style:{fontSize:16,margin:'12px 0 8px'}},'Features'),D('f f2',['Private balcony','Work desk','Modern layout','City views'].map(t=>D('ck',{key:t},I('ok',14),t))),
+  e('h2',{style:{fontSize:16,margin:'12px 0 8px'}},'Facilities'),D('f f2',['High-speed Wi-Fi','In-room safe','Air conditioning','Full kitchen','Flat-screen TV','Backup power'].map(t=>D('ck',{key:t},I('ok',14),t)))))));}
+function Reviews({go}){const b=[[88,40],[80,30],[70,22],[78,26],[92,34],[75,24],[85,28]],days=['12 Jun','13 Jun','14 Jun','15 Jun','16 Jun','17 Jun','18 Jun'],bars=[['Facilities',4.4],['Cleanliness',4.4],['Services',4.6],['Comfort',4.8],['Food and dining',4.5]],cs=[['Nigeria',38],['United Kingdom',22],['United States',16],['Ghana',14],['Canada',10]];
+ const bar=(l,v,m)=>D('bar',{key:l},Sp('',l,e('b',{style:{fontWeight:400,color:'var(--ink)'}},m||v)),e('i',null,e('b',{style:{width:(m?v:v/5*100)+'%'}})));
+ return e(Shell,{page:'rev',go,title:'Reviews'},D('rv',
+  D('card',D('hd',e('h2',null,'Review statistics'),Sp('chip y','Last 7 days')),D('ch',b.map((p,k)=>D('',{key:k},e('i',{style:{height:p[0]+'%'},title:'Positive'}),e('i',{style:{height:p[1]+'%'},title:'Negative'})))),D('',{style:{display:'flex',gap:14,margin:'8px 8px 0',color:'var(--mute)',fontSize:12}},days.map(d=>Sp('',{key:d,style:{flex:1,textAlign:'center'}},d)))),
+  D('card',D('hd',e('h2',null,'Overall rating'),Sp('chip y','This week')),D('',{style:{display:'flex',alignItems:'baseline',gap:6,marginBottom:10}},D('big',{style:{fontSize:40}},'4.6'),D('l','/5')),bars.map(x=>bar(x[0],x[1])),D('rt',{style:{marginTop:12}},'Impressive',D('l','from 2,546 reviews')))),
+ D('card',D('hd',e('h2',null,'Reviews by country'),D('l','Total guests ',e('b',{style:{color:'var(--ink)',fontWeight:500,fontSize:18}},'17,850'))),cs.map(c=>bar(c[0],c[1],c[1]+'%'))),
+ D('card',D('hd',e('h2',null,'Customer reviews')),D('rc',REV.map(r=>D('',{key:r[0]},D('n',D('av s',r[1]),r[0]),D('st','★'.repeat(r[2])+'☆'.repeat(5-r[2])),e('p',{style:{margin:'6px 0 0'}},r[3]))))));}
+
+const G=(n,...k)=>D('gr',{style:{'--n':n}},...k),CH=(t,c)=>Sp('chip '+(c||''),t),SC=(l,v,d)=>D('card',D('l',l),D('big',{style:{fontSize:28}},v),D('l',d));
+const Tt=(w,h,rows)=>D('tw',D('',D('tb',{style:{gridTemplateColumns:w}},...h.map((x,i)=>D('',{key:i},x))),rows.map((r,i)=>D('tr',{key:i,style:{gridTemplateColumns:w}},...r.map((c,j)=>D('',{key:j},c))))));
+const CB=(v,l,two)=>D('',D('ch'+(two?'':' one'),v.map((x,k)=>D('',{key:k},e('i',{style:{height:(two?x[0]:x)+'%'}}),two?e('i',{style:{height:x[1]+'%'}}):null))),D('',{style:{display:'flex',gap:14,margin:'8px 8px 0',color:'var(--mute)',fontSize:12}},l.map(d=>Sp('',{key:d,style:{flex:1,textAlign:'center'}},d))));
+const ST={Clean:'','In progress':'y',Dirty:'x',Low:'x',OK:'',Pending:'y',Done:'',Open:'y',Paid:'',Overdue:'x',Confirmed:'','Checked in':'y',Cancelled:'x'};
+const SB=s=>CH(s,ST[s]),HD=t=>D('hd',e('h2',null,t));
+const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+function Dash({go}){return e(Shell,{page:'dash',go,title:'Dashboard'},
+ G(4,SC('Total bookings','1,284','+12% vs last week'),SC('Check-ins today','24','8 pending'),SC('Check-outs today','19','5 pending'),SC('Revenue this month','₦18.4M','+8.2% vs last month')),
+ D('rv',D('card',D('hd',e('h2',null,'Revenue overview'),CH('This week','y')),CB([40,55,48,70,62,85,78],DAYS)),
+  D('card',HD('Occupancy'),D('',{style:{width:150,height:150,borderRadius:'50%',background:'conic-gradient(var(--lime) 0 72%,var(--mint) 72%)',display:'grid',placeItems:'center',margin:'8px auto 14px'}},D('',{style:{width:106,height:106,borderRadius:'50%',background:'var(--card)',display:'grid',placeItems:'center',fontSize:26}},'72%')),D('ln','Occupied',e('b',null,'54 units')),D('ln','Available',e('b',null,'21 units')))),
+ D('card',HD('Recent bookings'),Tt('1fr 1.3fr 1fr 1.2fr 1.2fr 1fr',['Booking ID','Guest','Room','Check-in','Check-out','Status'],[['BA-B00109','Chidi Okafor','Deluxe 101','June 19, 2026','June 22, 2026',SB('Confirmed')],['BA-B00110','Ngozi Eze','Studio 204','June 19, 2026','June 21, 2026',SB('Checked in')],['BA-B00111','Tunde Adeyemi','1-Bed 310','June 20, 2026','June 25, 2026',SB('Confirmed')],['BA-B00112','Amaka Obi','Penthouse 501','June 21, 2026','June 23, 2026',SB('Cancelled')]])))}
+function Msgs({go}){const cs=[['Chidi Okafor','CO','Can I get a late check-out?','10:42'],['Ngozi Eze','NE','Thanks, the airport pickup was great','09:15'],['Tunde Adeyemi','TA','Please send my invoice','Yesterday'],['Mrs Eze','ME','The lounge AC is not cooling','Yesterday'],['Amaka Obi','AO','Is breakfast included?','Mon']];
+ return e(Shell,{page:'msg',go,title:'Messages'},D('card',{style:{padding:0,overflow:'hidden'}},D('ms',
+  D('',{style:{borderRight:'1px solid var(--line)',padding:14}},D('in',{style:{marginBottom:10}},I('srch',16),e('input',{placeholder:'Search messages','aria-label':'Search messages'})),cs.map((c,i)=>D('cv'+(i?'':' on'),{key:i},D('av s',c[1]),D('',{style:{flex:1,minWidth:0}},c[0],e('small',null,c[2])),D('l',c[3])))),
+  D('',{style:{display:'flex',flexDirection:'column',padding:18}},D('hd',D('',{style:{display:'flex',gap:10,alignItems:'center'}},D('av s','CO'),D('',D('','Chidi Okafor'),D('l','Deluxe 101, checking in June 19'))),CH('Confirmed')),
+   D('',{style:{flex:1}},D('bb','Hello, can I get a late check-out on June 22?'),D('bb me','Hi Chidi, yes. Late check-out until 2:00 PM is arranged.'),D('bb','Great, thank you. Please also keep the airport pickup.')),
+   D('',{style:{display:'flex',gap:10}},D('in',e('input',{placeholder:'Type a message','aria-label':'Message'})),e('button',{className:'btn'},'Send'))))))}
+function HK({go}){const R=[['101','Deluxe','Dirty','Grace Ade','High','10:05'],['204','Studio','In progress','Peter Bello','Medium','10:20'],['310','1-Bedroom','Clean','Ify Nwosu','Low','09:40'],['402','2-Bedroom','Dirty','Grace Ade','High','10:12'],['501','Penthouse','Clean','Peter Bello','Low','08:55']];
+ return e(Shell,{page:'hk',go,title:'Housekeeping'},G(4,SC('Clean','38','Ready for guests'),SC('Dirty','9','Need cleaning'),SC('In progress','6','Being cleaned'),SC('Inspected','12','Checked by supervisor')),
+ D('card',D('hd',e('h2',null,'Room status'),D('in',{style:{flex:'0 1 300px'}},I('srch',16),e('input',{placeholder:'Search room, staff','aria-label':'Search rooms'}))),Tt('.7fr 1fr 1fr 1.2fr .9fr .8fr 1fr',['Room','Type','Status','Assigned to','Priority','Updated',''],R.map(r=>[r[0],r[1],SB(r[2]),r[3],r[4],r[5],e('button',{className:'btn g'},'Update')]))))}
+function Inv({go}){const R=[['Rice','Food','40 kg','10 kg','OK'],['Chicken','Food','8 kg','8 kg','Low'],['Cooking oil','Food','15 L','5 L','OK'],['Bath towels','Linen','28 pcs','30 pcs','Low'],['Bed sheets','Linen','64 pcs','40 pcs','OK'],['Toiletry kits','Supplies','120 pcs','60 pcs','OK']];
+ return e(Shell,{page:'inv',go,title:'Inventory'},G(3,SC('Total items','186','6 categories'),SC('Low stock','2','Reorder soon'),SC('Stock value','₦2.9M','Updated today')),
+ D('card',D('hd',e('h2',null,'Stock list'),e('button',{className:'btn'},'Add item')),Tt('1.4fr 1fr 1fr 1fr 1fr 1fr',['Item','Category','In stock','Minimum','Status',''],R.map(r=>[r[0],r[1],r[2],r[3],SB(r[4]),e('button',{className:'btn g'},'Restock')]))))}
+function Cal({go}){const B={3:['101 Okafor'],4:['204 Eze','310 Adeyemi'],9:['501 Obi'],12:['101 Eze'],15:['204 Bello','402 Eze'],19:['101 Okafor'],20:['310 Adeyemi'],24:['402 Obi']},c=[];DAYS.forEach(d=>c.push(D('h',{key:d},d)));for(let d=1;d<=30;d++)c.push(D('',{key:'d'+d},d,(B[d]||[]).map(b=>CH(b,'y'))));
+ return e(Shell,{page:'cal',go,title:'Calendar'},D('card',D('hd',e('h2',null,'June 2026'),D('',{style:{display:'flex',gap:8}},e('button',{className:'btn g'},'Previous'),e('button',{className:'btn g'},'Next'))),D('tw',D('cl',...c))))}
+function Fin({go}){return e(Shell,{page:'fin',go,title:'Financials'},G(3,SC('Revenue','₦18.4M','This month'),SC('Expenses','₦7.6M','This month'),SC('Net profit','₦10.8M','58% margin')),
+ D('card',D('hd',e('h2',null,'Revenue and expenses'),CH('Last 7 days','y')),CB([[80,45],[65,40],[72,50],[90,48],[85,52],[95,55],[78,42]],DAYS,1)),
+ D('card',HD('Recent transactions'),Tt('1fr 1.4fr 1.2fr 1fr 1fr',['Date','Description','Category','Amount','Status'],[['June 18','Booking BA-B00109','Rooms','₦506,250',SB('Paid')],['June 18','Restaurant sales','Food','₦184,000',SB('Paid')],['June 17','Generator fuel','Power','-₦96,000',SB('Paid')],['June 17','Staff salaries','Payroll','-₦1,420,000',SB('Pending')],['June 16','Corporate invoice','Rooms','₦780,000',SB('Overdue')]])))}
+function Con({go}){const R=[['Airport pickup','Chidi Okafor','101','Open','Emeka'],['Extra pillows and towels','Ngozi Eze','204','Done','Grace'],['Laundry pickup','Tunde Adeyemi','310','Open','Ify'],['Restaurant booking','Mrs Eze','402','Pending','Emeka'],['Late check-out','Amaka Obi','501','Done','Reception'],['Taxi to Port Harcourt Mall','Johan M.','208','Pending','Peter']];
+ return e(Shell,{page:'con',go,title:'Concierge'},G(3,SC('Open requests','7','2 urgent'),SC('Completed today','14','Avg 18 min'),SC('Guest rating','4.7','From requests')),D('gr',{style:{'--n':3}},R.map((r,i)=>D('card',{key:i},D('hd',e('h2',{style:{fontSize:16}},r[0]),SB(r[3])),D('l','Guest'),D('v',r[1]+', unit '+r[2]),D('l',{style:{marginTop:8}},'Assigned to'),D('v',r[4]),e('button',{className:'btn g',style:{marginTop:12}},'Open request')))))}
+function Soon({page,go}){const n=NAV.find(x=>x[0]==page);return e(Shell,{page,go,title:n[1]},D('card',e('h2',null,n[1]),e('p',{style:{color:'var(--mute)'}},'This screen is part of the full build. Open Reservation, Rooms or Reviews to explore the demo.'),e('button',{className:'btn',onClick:()=>go('res')},'Open reservation')))}
+function App(){const [p,setP]=useState('res');const V={dash:Dash,res:Guest,rooms:Rooms,msg:Msgs,hk:HK,inv:Inv,cal:Cal,fin:Fin,rev:Reviews,con:Con}[p]||Soon;return e(V,{page:p,go:setP})}
+ReactDOM.createRoot(document.getElementById('root')).render(e(App));
+</script></body></html>

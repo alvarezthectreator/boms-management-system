@@ -1,0 +1,208 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}</style><style>:root{color-scheme:light dark;--md-bg:#fff;--md-text:rgba(0,0,0,.8);--md-muted:rgba(0,0,0,.6);--md-fill:rgba(0,0,0,.04);--md-fill-strong:rgba(0,0,0,.06);--md-rule:rgba(0,0,0,.1);--md-rule-strong:rgba(0,0,0,.16);--md-link:hsl(210 100% 45%)}@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){--md-bg:#0d0d0d;--md-text:rgba(255,255,255,.85);--md-muted:rgba(255,255,255,.6);--md-fill:rgba(255,255,255,.06);--md-fill-strong:rgba(255,255,255,.09);--md-rule:rgba(255,255,255,.14);--md-rule-strong:rgba(255,255,255,.22);--md-link:hsl(210 100% 72%)}}:root[data-theme="dark"]{color-scheme:dark;--md-bg:#0d0d0d;--md-text:rgba(255,255,255,.85);--md-muted:rgba(255,255,255,.6);--md-fill:rgba(255,255,255,.06);--md-fill-strong:rgba(255,255,255,.09);--md-rule:rgba(255,255,255,.14);--md-rule-strong:rgba(255,255,255,.22);--md-link:hsl(210 100% 72%)}:root[data-theme="light"]{color-scheme:light}@media print{:root,:root[data-theme="dark"]{color-scheme:light;--md-bg:#fff;--md-text:rgba(0,0,0,.8);--md-muted:rgba(0,0,0,.6);--md-fill:rgba(0,0,0,.04);--md-fill-strong:rgba(0,0,0,.06);--md-rule:rgba(0,0,0,.1);--md-rule-strong:rgba(0,0,0,.16);--md-link:hsl(210 100% 45%)}}body{background:var(--md-bg);color:var(--md-text);max-width:720px;margin:0 auto;padding:32px;display:flex;flex-direction:column;gap:10px;font:14px/1.55 -apple-system,BlinkMacSystemFont,'SF Pro','Segoe UI',sans-serif;overflow-wrap:break-word}body>:first-child{margin-top:0}h1,h2,h3,h4,h5,h6{margin:6px 0 0;line-height:1.25;font-weight:600;text-wrap:balance}h1{font-size:1.35em}h2{font-size:1.15em;color:var(--md-muted)}h3,h4,h5,h6{font-size:1em}p,ul,ol,blockquote,table,pre,hr{margin:0}strong{font-weight:600}a{color:var(--md-link);text-decoration:none}a:hover{text-decoration:underline}ul,ol{display:flex;flex-direction:column;gap:6px;padding-left:22px}ul{list-style:disc}ol{list-style:decimal}:is(li,td,th)>*+:is(p,ul,ol,blockquote){margin-top:6px}blockquote{display:flex;flex-direction:column;gap:10px;border-left:2px solid var(--md-rule);padding-left:10px;color:var(--md-muted)}:not(pre)>code{background:var(--md-fill);padding:1px 3px;border-radius:4px;font:.92em 'SF Mono',ui-monospace,Menlo,Consolas,monospace}a>code{background:none;color:inherit}pre{background:var(--md-fill);padding:10px 12px;border-radius:6px;overflow-x:auto;font:12px/1.5 'SF Mono',ui-monospace,Menlo,Consolas,monospace;margin-block:4px}pre code{background:none;padding:0;font:inherit}table{width:100%;border-collapse:separate;border-spacing:2px;font:inherit}th,td{padding:6px 8px;border-radius:3px;text-align:left;vertical-align:top}th{background:var(--md-fill-strong);font-weight:600}td{background:var(--md-fill)}:is(th,td) :not(pre)>code{background:transparent}hr{border:0;border-top:1px solid var(--md-rule-strong);margin-block:10px}img{max-width:100%;height:auto;border-radius:4px}</style>
+</head><body>
+<h1>Boms Apartment: functions document</h1>
+<p>This document lists every function the UI needs. The UI is built; none of these functions are connected yet. Each section matches a page in the sidebar.</p>
+<h2>1. Global functions (used on every page)</h2>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Login and logout</td>
+<td>Email and password sign-in, session token, auto logout after inactivity</td>
+</tr>
+<tr>
+<td>Role-based access</td>
+<td>Roles: Worker, Manager, CEO/Admin. Hide pages and buttons the role cannot use</td>
+</tr>
+<tr>
+<td>Notifications</td>
+<td>Bell icon: new booking, low stock, overdue invoice, new message</td>
+</tr>
+<tr>
+<td>Global search</td>
+<td>Search guests, bookings, rooms by name, ID or status</td>
+</tr>
+<tr>
+<td>Audit log</td>
+<td>Record who changed what and when (refunds, cancellations, price edits, stock changes)</td>
+</tr>
+<tr>
+<td>Settings</td>
+<td>Profile, password, business details, tax rates, currency (NGN)</td>
+</tr>
+<tr>
+<td>Export</td>
+<td>Download any table as PDF or Excel/CSV</td>
+</tr>
+<tr>
+<td>Print</td>
+<td>Invoices, receipts, guest bills, reports</td>
+</tr>
+</tbody>
+</table>
+<h2>2. Dashboard</h2>
+<ul>
+<li><strong>Summary cards:</strong> total bookings, check-ins today, check-outs today, revenue this month, each with change versus the previous period.</li>
+<li><strong>Revenue chart:</strong> revenue per day for a selectable range (this week, month, year).</li>
+<li><strong>Occupancy:</strong> occupied units divided by total units, shown as a percentage.</li>
+<li><strong>Recent bookings table:</strong> latest bookings with status. Clicking a row opens Guest Profile.</li>
+</ul>
+<h2>3. Reservation (guest profile and bookings)</h2>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Create booking</td>
+<td>Guest, unit type, unit, dates, guests, requests, amenities. Check availability first</td>
+</tr>
+<tr>
+<td>Availability check</td>
+<td>A unit cannot be double booked. Lock a unit briefly while a booking is being created</td>
+</tr>
+<tr>
+<td>Price calculation</td>
+<td>nights x rate, plus extras, VAT (7.5%), service charge (5%). Discounts need Manager approval</td>
+</tr>
+<tr>
+<td>Edit booking</td>
+<td>Change dates, unit, guests, notes. Recalculate the price and keep a history</td>
+</tr>
+<tr>
+<td>Cancel and restore booking</td>
+<td>Apply the cancellation policy and refund rules. Record who cancelled and why</td>
+</tr>
+<tr>
+<td>Check-in and check-out</td>
+<td>Change unit status, start and close the guest bill, trigger housekeeping</td>
+</tr>
+<tr>
+<td>Guest profile</td>
+<td>Create and edit guest details, ID number, nationality, loyalty tier and points</td>
+</tr>
+<tr>
+<td>Loyalty</td>
+<td>Earn points per stay, tier rules (e.g. Platinum), redeem points</td>
+</tr>
+<tr>
+<td>Payments</td>
+<td>Cash, transfer, card, corporate invoice. Mark Paid, Part paid or Refunded</td>
+</tr>
+<tr>
+<td>Booking history</td>
+<td>Filter by date range and search. Sort by any column</td>
+</tr>
+<tr>
+<td>Invoice</td>
+<td>Generate, print and email the invoice for a booking</td>
+</tr>
+</tbody>
+</table>
+<h2>4. Rooms</h2>
+<ul>
+<li><strong>List and filter:</strong> search, sort (popular, price) and filter by unit type.</li>
+<li><strong>Add and edit room type:</strong> name, size, bed type, guests, description, photos, price per night, features and facilities.</li>
+<li><strong>Availability counter:</strong> available units out of total units, per type.</li>
+<li><strong>Room status:</strong> Available, Occupied, Cleaning, Out of order. Updates automatically from bookings and housekeeping.</li>
+<li><strong>Seasonal pricing (optional):</strong> different rates for dates or weekends.</li>
+</ul>
+<h2>5. Messages</h2>
+<ul>
+<li>Conversation list with unread count and last message.</li>
+<li>Send and receive messages in real time, with attachments.</li>
+<li>Link a conversation to a guest and booking.</li>
+<li>Mark as read, search conversations, assign to a staff member.</li>
+<li>Optional: send by email, SMS or WhatsApp.</li>
+</ul>
+<h2>6. Housekeeping</h2>
+<ul>
+<li><strong>Room status board:</strong> Clean, Dirty, In progress, Inspected.</li>
+<li><strong>Auto-create tasks:</strong> when a guest checks out, mark the room Dirty and create a cleaning task.</li>
+<li><strong>Assign tasks</strong> to staff, with priority and due time.</li>
+<li><strong>Update status</strong> from a phone. Record the time started and finished.</li>
+<li><strong>Supervisor inspection:</strong> approve a room before it becomes Available.</li>
+<li><strong>Report issues:</strong> link a maintenance request to a room.</li>
+</ul>
+<h2>7. Inventory</h2>
+<ul>
+<li><strong>Items:</strong> name, category (Food, Linen, Supplies), unit, quantity, minimum level, cost, supplier.</li>
+<li><strong>Stock movements:</strong> add stock (restock), use stock, adjust (loss, damage). Record who and why.</li>
+<li><strong>Low stock alerts</strong> when quantity is at or below the minimum.</li>
+<li><strong>Purchase orders:</strong> create, approve and receive stock from suppliers. A received order updates quantity and records an expense.</li>
+<li><strong>Stock value:</strong> quantity x cost.</li>
+<li><strong>Link to restaurant (optional):</strong> recipes deduct ingredients automatically when a dish is sold.</li>
+</ul>
+<h2>8. Calendar</h2>
+<ul>
+<li>Monthly, weekly and daily views of bookings per unit.</li>
+<li>Create or move a booking by clicking a date or dragging.</li>
+<li>Colour by status (Confirmed, Checked in, Cancelled).</li>
+<li>Block dates for maintenance.</li>
+<li>Navigate months with Previous and Next.</li>
+</ul>
+<h2>9. Financials</h2>
+<ul>
+<li><strong>Cards:</strong> revenue, expenses and net profit for a selectable period.</li>
+<li><strong>Revenue and expenses chart</strong> by day, week or month.</li>
+<li><strong>Transactions:</strong> every payment and expense with date, description, category, amount and status.</li>
+<li><strong>Record expense:</strong> category (salaries, power and fuel, repairs, internet, supplies), amount, note, receipt upload. Large amounts need Manager approval.</li>
+<li><strong>Invoices and receivables:</strong> list unpaid and overdue invoices, record payments, send reminders.</li>
+<li><strong>Reports:</strong> profit and loss, revenue by source (rooms, food, extras), occupancy, ADR and RevPAR.
+<ul>
+<li>Occupancy = rooms sold / rooms available</li>
+<li>ADR = room revenue / rooms sold</li>
+<li>RevPAR = room revenue / rooms available</li>
+</ul>
+</li>
+<li><strong>Payroll (optional):</strong> staff list, salaries, deductions, payslips.</li>
+</ul>
+<h2>10. Reviews</h2>
+<ul>
+<li><strong>Collect reviews:</strong> send a review request after check-out.</li>
+<li><strong>Statistics:</strong> positive and negative counts per day, plus an overall rating out of 5.</li>
+<li><strong>Category ratings:</strong> facilities, cleanliness, services, comfort, food and dining.</li>
+<li><strong>Reviews by country</strong> (from guest nationality).</li>
+<li><strong>Review list:</strong> sort by newest or rating, and reply to a review.</li>
+</ul>
+<h2>11. Concierge</h2>
+<ul>
+<li>Create a guest request (airport pickup, laundry, extra items, restaurant booking, taxi).</li>
+<li>Assign to staff, set status (Open, Pending, Done) and track completion time.</li>
+<li>Add the cost of a request to the guest bill.</li>
+<li>Notify the guest when the request is completed.</li>
+</ul>
+<h2>12. Suggested data tables</h2>
+<p><code>users</code>, <code>roles</code>, <code>guests</code>, <code>room_types</code>, <code>rooms</code>, <code>bookings</code>, <code>booking_extras</code>, <code>payments</code>, <code>invoices</code>, <code>housekeeping_tasks</code>, <code>inventory_items</code>, <code>stock_movements</code>, <code>purchase_orders</code>, <code>suppliers</code>, <code>expenses</code>, <code>messages</code>, <code>reviews</code>, <code>concierge_requests</code>, <code>notifications</code>, <code>audit_logs</code>.</p>
+<p>Every table should include <code>property_id</code>, <code>created_at</code>, <code>updated_at</code> and <code>created_by</code>.</p>
+<h2>13. Business rules to confirm with the client</h2>
+<ol>
+<li>Check-in and check-out times, and the late check-out charge.</li>
+<li>Cancellation and refund policy.</li>
+<li>Tax rates (VAT 7.5%, service charge 5%) and whether prices include tax.</li>
+<li>Discount limits per role.</li>
+<li>Deposit rules for long stays (weekly and monthly rates).</li>
+<li>Who approves expenses and above what amount.</li>
+<li>Minimum stock levels per item.</li>
+<li>How long to keep guest data (privacy and data protection law).</li>
+</ol>
+<h2>14. Suggested build order</h2>
+<ol>
+<li>Login, roles, rooms and room types</li>
+<li>Bookings, guest profile, availability and price calculation</li>
+<li>Check-in and check-out, payments and invoices</li>
+<li>Housekeeping and calendar</li>
+<li>Inventory and expenses</li>
+<li>Financial reports and the dashboard</li>
+<li>Messages, reviews and concierge</li>
+</ol>
+
+</body></html>
