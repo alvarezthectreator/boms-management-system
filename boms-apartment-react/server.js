@@ -8,6 +8,7 @@ import { findBookingConflict } from "./availability.js";
 import { registerOperationsRoutes } from "./operations-api.js";
 import { registerFnbRoutes } from "./fnb-api.js";
 import { registerWorkspaceRoutes } from "./workspace-api.js";
+import { getLagosDateTime, registerReservationWorkflowRoutes, workerMayCheckOut } from "./reservation-workflow-api.js";
 import { createAuthMiddleware, registerAuthRoutes } from "./auth-api.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -304,7 +305,8 @@ app.patch("/api/reservations/:id/status", (request, response) => {
   const role = request.user.role;
   const allowedStatuses = ["hold", "confirmed", "checked_in", "checked_out", "cancelled", "no_show"];
   if (!allowedStatuses.includes(status)) return response.status(400).json({ error: "Invalid reservation status." });
-  if (!["manager", "ceo"].includes(role) && !(role === "worker" && status === "checked_in")) {
+  const workerCheckout = role === "worker" && status === "checked_out";
+  if (!["manager", "ceo"].includes(role) && !(role === "worker" && ["checked_in", "checked_out"].includes(status))) {
     return response.status(403).json({ error: "Your role cannot change this reservation status." });
   }
   if (status === "cancelled" && !String(reason).trim()) {
@@ -324,6 +326,16 @@ app.patch("/api/reservations/:id/status", (request, response) => {
         FROM bookings WHERE id = ? AND property_id = ? AND deleted_at IS NULL
       `).get(request.params.id, propertyId);
       if (!booking) throw Object.assign(new Error("Reservation not found."), { status: 404 });
+      if (workerCheckout) {
+        const { date, time } = getLagosDateTime();
+        const invoice = database.prepare(`
+          SELECT COALESCE(sum(max(0, total_kobo - paid_kobo)), 0) AS balance_kobo
+          FROM invoices WHERE booking_id = ? AND property_id = ? AND deleted_at IS NULL
+        `).get(request.params.id, propertyId);
+        if (!workerMayCheckOut(booking.status, booking.check_out, date, time, Number(invoice?.balance_kobo || 0))) {
+          throw Object.assign(new Error("Staff can check out a guest due today after noon, once the balance is paid."), { status: 409 });
+        }
+      }
       const room = getRoom(booking.unit_id);
       if (status === "checked_in" && !["available", "inspected"].includes(room?.status)) {
         throw Object.assign(new Error("This room is not ready for check-in."), { status: 409 });
@@ -566,6 +578,7 @@ app.put("/api/reservations/:id", (request, response) => {
 registerOperationsRoutes(app, database, propertyId);
 registerFnbRoutes(app, database, propertyId);
 registerWorkspaceRoutes(app, database, propertyId);
+registerReservationWorkflowRoutes(app, database, propertyId);
 
 app.listen(port, "127.0.0.1", () => {
   console.log(`Boms Apartment API listening on http://127.0.0.1:${port}`);

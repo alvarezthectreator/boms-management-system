@@ -50,6 +50,7 @@ import {
   calculateQuote,
   createInitialData,
   defaultCheckoutDate,
+  featuredFoodMenu,
   formatDate,
   formatMoney,
   getNightlyRates,
@@ -508,6 +509,7 @@ const staffOptionList = (data) =>
     .map((user) => ({ value: user.name, label: user.name }));
 
 function BookingDialog({ data, role, onClose, onSave, record }) {
+  const editing = Boolean(record?.id);
   const initialCheckIn = record?.checkIn || TODAY;
   const initialCheckOut = record?.checkOut || defaultCheckoutDate(initialCheckIn);
   const [checkIn, setCheckIn] = useState(initialCheckIn);
@@ -602,8 +604,8 @@ function BookingDialog({ data, role, onClose, onSave, record }) {
   }
   return (
     <ModalFrame
-      title={record ? `Edit reservation · ${record.id}` : "Create reservation"}
-      description={record ? "Update dates, room, guests, and the quoted total." : "Check availability and confirm the stay details."}
+      title={editing ? `Edit reservation · ${record.id}` : "Create reservation"}
+      description={editing ? "Update dates, room, guests, and the quoted total." : "Check availability and confirm the stay details."}
       onClose={onClose}
     >
       <form onSubmit={submit} className="space-y-5 p-5 sm:p-6">
@@ -1344,13 +1346,164 @@ function RecordDialog({ type, data, onClose, onSave, record }) {
   );
 }
 
+function DashboardOrderComposer({ data, fnbData, loading, canAddMenu, onAddMenu, onSave }) {
+  const [station, setStation] = useState("kitchen");
+  const [bookingId, setBookingId] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("cash");
+  const [loungeGuestName, setLoungeGuestName] = useState("");
+  const [cart, setCart] = useState([]);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const stationItems = fnbData.menuItems.filter((item) => item.station === station);
+  const normalizedName = (name = "") => name.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const catalogCards = station === "kitchen"
+    ? [
+        ...featuredFoodMenu.map((dish) => ({
+          id: dish.id,
+          name: dish.name,
+          category: dish.category,
+          imageUrl: dish.imageUrl,
+          imageCredit: dish.imageCredit,
+          imageSource: dish.imageSource,
+          item: stationItems.find((entry) => normalizedName(entry.name) === normalizedName(dish.name)) || null,
+        })),
+        ...stationItems
+          .filter((item) => !featuredFoodMenu.some((dish) => normalizedName(dish.name) === normalizedName(item.name)))
+          .map((item) => ({ id: item.id, name: item.name, category: item.category, item })),
+      ]
+    : stationItems.map((item) => ({ id: item.id, name: item.name, category: item.category, item }));
+  const checkedInBookings = data.bookings.filter((booking) => booking.databaseBooking && booking.status === "checked_in");
+  const subtotalKobo = cart.reduce((sum, line) => {
+    const item = fnbData.menuItems.find((entry) => entry.id === line.menuItemId);
+    return sum + (item?.priceKobo || 0) * line.quantity;
+  }, 0);
+  const serviceKobo = Math.round(subtotalKobo * Number(data.settings.servicePercent || 0) / 100);
+  const vatKobo = Math.round(subtotalKobo * Number(data.settings.vatPercent || 0) / 100);
+  const totalKobo = subtotalKobo + serviceKobo + vatKobo;
+
+  function addItem(item) {
+    setCart((current) => {
+      const existing = current.find((line) => line.menuItemId === item.id);
+      return existing
+        ? current.map((line) => line.menuItemId === item.id ? { ...line, quantity: line.quantity + 1 } : line)
+        : [...current, { menuItemId: item.id, quantity: 1, modifierIds: [] }];
+    });
+  }
+
+  async function placeOrder() {
+    if (!cart.length) return;
+    setSaving(true);
+    setError("");
+    const booking = checkedInBookings.find((item) => item.id === bookingId);
+    const result = await onSave({
+      items: cart,
+      source: booking ? "room_service" : "lounge",
+      paymentMethod: booking ? "room_charge" : paymentMethod,
+      bookingId: booking?.id || "",
+      unitId: booking?.unitId || "",
+      guestName: booking ? guestFor(data, booking.guestId)?.name || "" : loungeGuestName.trim(),
+    });
+    setSaving(false);
+    if (result?.error) setError(result.error);
+    else setCart([]);
+  }
+
+  return (
+    <Panel className="mt-4 p-4 sm:p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-semibold text-[#25332b]">Order food & drinks</h2>
+          <p className="mt-1 text-xs text-[#7a8880]">Choose menu items and send them to the kitchen or bar.</p>
+        </div>
+        <div className="inline-flex rounded-lg bg-[#edf2ee] p-1" role="group" aria-label="Menu section">
+          {[ ["kitchen", "Food"], ["bar", "Drinks"] ].map(([key, label]) => (
+            <button key={key} type="button" onClick={() => setStation(key)} aria-pressed={station === key}
+              className={`min-h-9 rounded-md px-4 text-sm font-medium ${station === key ? "bg-white text-[#25332b] shadow-sm" : "text-[#718078]"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(18rem,0.8fr)]">
+        <div className="max-h-[30rem] overflow-y-auto rounded-lg border border-[#e3eae5] p-2" aria-label={`${station === "bar" ? "Drinks" : "Food"} menu`}>
+          {loading ? <p className="p-4 text-sm text-[#718078]">Loading menu availability…</p> : catalogCards.length ? (
+            <div className="divide-y divide-[#e8eeea]">
+              {catalogCards.map((dish) => {
+                const configuredItem = dish.item;
+                const isConfigured = Boolean(configuredItem);
+                const isAvailable = Boolean(configuredItem?.available);
+                const canAdd = isAvailable || (!isConfigured && canAddMenu);
+                return <div key={dish.id} className="flex min-h-[4.5rem] items-center gap-3 py-2.5 first:pt-1 last:pb-1">
+                  {dish.imageUrl ? <img src={dish.imageUrl} alt="" loading="lazy" className="size-11 shrink-0 rounded-full object-cover ring-1 ring-[#dfe7e1]" /> : <span className="grid size-11 shrink-0 place-items-center rounded-full bg-[#edf3ee] text-[#688273]"><Utensils size={17} /></span>}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-[#2c3b34]">{dish.name}</p>
+                    <p className="truncate text-xs text-[#77857d]">{isConfigured ? formatMoney(configuredItem.priceKobo) : "Price & recipe needed"}{dish.imageSource && <> · <a href={dish.imageSource} target="_blank" rel="noreferrer" className="underline decoration-[#c4cec7] underline-offset-2">Photo: {dish.imageCredit}</a></>}</p>
+                  </div>
+                  <button type="button" disabled={loading || !canAdd || !isAvailable && !canAddMenu} title={isAvailable ? `Add ${dish.name}` : canAddMenu && !isConfigured ? `Set up ${dish.name}` : isConfigured ? `${dish.name} is unavailable` : "Ask a manager to set up this dish"} aria-label={isAvailable ? `Add ${dish.name}` : canAddMenu && !isConfigured ? `Set up ${dish.name}` : `Unavailable: ${dish.name}`} onClick={() => isAvailable ? addItem(configuredItem) : onAddMenu({ name: dish.name, category: dish.category, station })} className="grid size-9 shrink-0 place-items-center rounded-full border border-[#dce6dd] text-[#176b54] hover:bg-[#edf6f0] disabled:cursor-not-allowed disabled:text-[#a4afa7]">
+                    <Plus size={17} />
+                  </button>
+                </div>;
+              })}
+            </div>
+          ) : <div className="flex min-h-40 flex-col items-start justify-center gap-2 p-4">
+            <p className="text-sm font-semibold text-[#34443a]">No {station === "bar" ? "drinks" : "food"} in the saved menu</p>
+            <p className="text-xs text-[#718078]">{canAddMenu ? "Add menu items with recipes to make them available for orders." : "Ask a manager to add menu items before taking an order."}</p>
+            {canAddMenu && <Button variant="secondary" className="min-h-9 px-3 text-xs" onClick={() => onAddMenu()}><Plus size={15} />Add menu item</Button>}
+          </div>}
+        </div>
+        <div className="flex min-h-48 flex-col rounded-lg border border-[#e3eae5] p-3">
+          <div className="mb-2 flex items-center justify-between"><h3 className="text-sm font-semibold">Current order</h3><span className="text-xs text-[#718078]">{cart.reduce((sum, line) => sum + line.quantity, 0)} items</span></div>
+          <label className="mb-3 block text-xs font-medium text-[#58685e]">Order for
+            <select value={bookingId} onChange={(event) => setBookingId(event.target.value)} className="mt-1 block min-h-10 w-full rounded-md border border-[#dfe7e1] bg-white px-2.5 text-sm">
+              <option value="">Lounge · personal order</option>
+              {checkedInBookings.map((booking) => <option key={booking.id} value={booking.id}>{unitFor(data, booking.unitId)?.number || "Room"} · {guestFor(data, booking.guestId)?.name || booking.id}</option>)}
+            </select>
+          </label>
+          {!bookingId && <label className="mb-3 block text-xs font-medium text-[#58685e]">Guest name (optional)
+            <input value={loungeGuestName} onChange={(event) => setLoungeGuestName(event.target.value)} placeholder="Name for this order" className="mt-1 block min-h-10 w-full rounded-md border border-[#dfe7e1] px-2.5 text-sm" />
+          </label>}
+          {!bookingId && <label className="mb-3 block text-xs font-medium text-[#58685e]">Payment
+            <select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} className="mt-1 block min-h-10 w-full rounded-md border border-[#dfe7e1] bg-white px-2.5 text-sm">
+              {["cash", "card", "transfer"].map((method) => <option key={method} value={method}>{method[0].toUpperCase() + method.slice(1)}</option>)}
+            </select>
+          </label>}
+          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+            {cart.map((line) => {
+              const item = fnbData.menuItems.find((entry) => entry.id === line.menuItemId);
+              return <div key={line.menuItemId} className="flex items-center gap-2 text-sm">
+                <span className="min-w-0 flex-1 truncate">{item?.name}</span>
+                <button type="button" aria-label={`Remove one ${item?.name}`} onClick={() => setCart((current) => current.flatMap((row) => row.menuItemId !== line.menuItemId ? [row] : row.quantity > 1 ? [{ ...row, quantity: row.quantity - 1 }] : []))} className="grid size-7 place-items-center rounded text-[#718078] hover:bg-[#edf2ee]">−</button>
+                <span className="w-5 text-center tabular-nums">{line.quantity}</span>
+                <button type="button" aria-label={`Add one ${item?.name}`} onClick={() => addItem(item)} className="grid size-7 place-items-center rounded text-[#176b54] hover:bg-[#edf2ee]">+</button>
+              </div>;
+            })}
+            {!cart.length && <p className="py-2 text-xs text-[#88958d]">Select food or drinks to add them here.</p>}
+          </div>
+          <div className="mt-3 border-t border-[#e8eeea] pt-3">
+            <div className="mb-2 flex justify-between text-sm font-semibold"><span>Total</span><span>{formatMoney(totalKobo)}</span></div>
+            {error && <p role="alert" className="mb-2 text-xs text-rose-700">{error}</p>}
+            <Button className="w-full" disabled={!cart.length || saving} onClick={placeOrder}>{saving ? "Sending…" : "Send order"}<ArrowRight size={15} /></Button>
+          </div>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 function Dashboard({
   data,
-  role,
+  databaseRooms,
+  fnbData,
+  fnbLoading,
   userName,
   onNavigate,
   onCreate,
   onBookingAction,
+  onExtendBooking,
+  onSaveFnbOrder,
+  canAddMenu,
+  onAddMenu,
+  checkoutCalls,
   housekeepingPrepAlerts,
   checkoutFollowUps,
 }) {
@@ -1389,9 +1542,20 @@ function Dashboard({
     inventory: data.inventory,
     settings: data.settings,
   }, TODAY, (typeof lagosClock !== "undefined" ? lagosClock.time : "12:00"));
+  const roomInventory = databaseRooms?.length ? databaseRooms : data.units.map((unit) => {
+    const roomType = roomTypeFor(data, unit.roomTypeId);
+    return { ...unit, roomTypeName: roomType?.name || "Room", images: roomType?.images || [] };
+  });
+  const defaultRoomCheckout = defaultCheckoutDate(TODAY);
+  const bookableRooms = roomInventory.filter((room) => {
+    const unit = data.units.find((item) => item.id === room.id);
+    return ["available", "inspected"].includes(room.status) && room.rateKobo > 0 && unit &&
+      isUnitAvailable(unit, TODAY, defaultRoomCheckout, data.bookings, data.blocks || []);
+  });
   const barValues = [42, 67, 52, 84, 58, 91, 73];
   return (
-    <>
+    <div className="flex flex-col">
+      <div className="order-first">
       <PageHeader
         eyebrow="Monday, 5 October 2026 · Lagos"
         title={`Good morning, ${userName.split(" ")[0]}`}
@@ -1409,23 +1573,31 @@ function Dashboard({
           </div>
         }
       />
+      </div>
+      <Panel className="mt-4 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e8eeea] px-4 py-4 sm:px-5">
+          <div><h2 className="font-semibold text-[#25332b]">Book a room</h2><p className="mt-1 text-xs text-[#7a8880]">Rooms ready for a new reservation</p></div>
+          <Button onClick={() => onCreate("booking")}><Plus size={16} />New booking</Button>
+        </div>
+        {bookableRooms.length ? <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-4">
+          {bookableRooms.slice(0, 4).map((room) => (
+            <article key={room.id} className="overflow-hidden rounded-lg border border-[#e3eae5] bg-white">
+              {room.images?.[0] ? <img src={room.images[0]} alt={`${room.roomTypeName} room ${room.number}`} className="aspect-[16/9] w-full object-cover" /> : <div className="grid aspect-[16/9] place-items-center bg-[#edf3ee] text-[#789082]"><BedDouble size={34} strokeWidth={1.4} /></div>}
+              <div className="flex items-center justify-between gap-3 p-3">
+                <div className="min-w-0"><p className="truncate text-sm font-semibold">Room {room.number}</p><p className="truncate text-xs text-[#718078]">{room.roomTypeName} · {room.rateKobo > 0 ? `${formatMoney(room.rateKobo)}/night` : "Rate not set"}</p></div>
+                <Button variant="secondary" className="min-h-9 shrink-0 px-2.5 text-xs" disabled={!(room.rateKobo > 0)} onClick={() => onCreate("booking", { unitId: room.id, roomTypeId: room.roomTypeId, checkIn: TODAY })}>{room.rateKobo > 0 ? "Book" : "Rate needed"}</Button>
+              </div>
+            </article>
+          ))}
+        </div> : <div className="px-5 py-4 text-sm text-[#718078]">No rooms are ready to reserve right now. Check room status or create a booking to see the full availability calendar.</div>}
+      </Panel>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {role === "worker" ? (
-          <StatCard
-            label="Rooms booked"
-            value={deskSummary.roomsBooked}
-            note="Active room reservations"
-            icon={BedDouble}
-          />
-        ) : (
-          <StatCard
-            label="Revenue received"
-            value={formatMoney(revenue)}
-            note="Payments received this month"
-            trend="12.4% vs last month"
-            icon={Wallet}
-          />
-        )}
+        <StatCard
+          label="Rooms booked today"
+          value={deskSummary.roomsBookedToday}
+          note="Rooms occupied or arriving today"
+          icon={BedDouble}
+        />
         <StatCard
           label="Occupancy"
           value={`${occupancy}%`}
@@ -1445,6 +1617,26 @@ function Dashboard({
           icon={CalendarDays}
         />
       </div>
+      <DashboardOrderComposer data={data} fnbData={fnbData} loading={fnbLoading} canAddMenu={canAddMenu} onAddMenu={onAddMenu} onSave={onSaveFnbOrder} />
+      {checkoutCalls.length > 0 && <Panel className="mt-4 border-amber-300 bg-amber-50/70 p-4 sm:p-5">
+        <div className="mb-3"><h2 className="font-semibold text-[#503915]">Call today’s checkouts</h2><p className="mt-1 text-xs text-[#795e2b]">Call guests by 11:00 a.m. and extend one night if they confirm.</p></div>
+        <div className="divide-y divide-amber-200">{checkoutCalls.map((booking) => {
+          const guest = guestFor(data, booking.guestId);
+          const unit = unitFor(data, booking.unitId);
+          return <div key={booking.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-1 last:pb-0">
+            <div><p className="text-sm font-medium text-[#3c3322]">{guest?.name || "Guest"} · Room {unit?.number || "—"}</p><p className="mt-0.5 text-xs text-[#795e2b]">Checkout by {data.settings.checkOutTime}</p></div>
+            <div className="flex items-center gap-2">{guest?.phone && <a href={`tel:${guest.phone.replace(/[^+\d]/g, "")}`} className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-amber-500 px-3 text-sm font-medium text-[#795e2b]"><PhoneCall size={15} />Call</a>}<Button variant="secondary" className="min-h-9 px-3 text-sm" onClick={() => onExtendBooking(booking)}>Extend 1 night</Button></div>
+          </div>;
+        })}</div>
+      </Panel>}
+      {checkoutFollowUps.length > 0 && <Panel className="mt-4 border-amber-300 bg-amber-50/70 p-4 sm:p-5">
+        <div className="mb-3"><h2 className="font-semibold text-[#503915]">Checkout due now</h2><p className="mt-1 text-xs text-[#795e2b]">If the guest is not extending, complete checkout so housekeeping can prepare the room.</p></div>
+        <div className="divide-y divide-amber-200">{checkoutFollowUps.map((booking) => {
+          const guest = guestFor(data, booking.guestId);
+          const unit = unitFor(data, booking.unitId);
+          return <div key={booking.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-1 last:pb-0"><div><p className="text-sm font-medium text-[#3c3322]">{guest?.name || "Guest"} · Room {unit?.number || "—"}</p><p className="mt-0.5 text-xs text-[#795e2b]">Due out by {data.settings.checkOutTime}</p></div><Button className="min-h-9 px-3 text-sm" onClick={() => onBookingAction(booking, "checkout")}>Check out</Button></div>;
+        })}</div>
+      </Panel>}
       {housekeepingPrepAlerts.length > 0 && (
         <Panel className="mt-4 border-[#d7e3d9] bg-[#f5f8f4] p-4 sm:p-5">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -1470,38 +1662,8 @@ function Dashboard({
           </div>
         </Panel>
       )}
-      {role === "worker" && checkoutFollowUps.length > 0 && (
-        <Panel className="mt-4 border-amber-300 bg-amber-50/70 p-4 sm:p-5">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <h2 className="font-semibold text-[#503915]">Checkout follow-up needed</h2>
-              <p className="mt-1 text-xs text-[#795e2b]">Guests due out by {data.settings.checkOutTime} who are still checked in.</p>
-            </div>
-            <span className="grid size-8 place-items-center rounded-full bg-white text-sm font-semibold text-[#795e2b]">{checkoutFollowUps.length}</span>
-          </div>
-          <div className="divide-y divide-amber-200">
-            {checkoutFollowUps.map((booking) => {
-              const guest = guestFor(data, booking.guestId);
-              const unit = unitFor(data, booking.unitId);
-              return (
-                <div key={booking.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-1 last:pb-0">
-                  <div>
-                    <p className="text-sm font-medium text-[#3c3322]">{guest?.name || "Guest"} · Room {unit?.number || "—"}</p>
-                    <p className="mt-0.5 text-xs text-[#795e2b]">Ask whether they’re extending or checking out.</p>
-                  </div>
-                  {guest?.phone ? (
-                    <a href={`tel:${guest.phone.replace(/[^+\d]/g, "")}`} className="inline-flex min-h-9 items-center gap-2 rounded-lg bg-[#7b5720] px-3 text-sm font-medium text-white hover:bg-[#644619]">
-                      <PhoneCall size={15} />Call guest
-                    </a>
-                  ) : <span className="text-xs text-[#795e2b]">No phone number on file</span>}
-                </div>
-              );
-            })}
-          </div>
-        </Panel>
-      )}
       {lowStockItems.length > 0 && (
-        <Panel className="mt-4 border-rose-300 bg-rose-50 p-4 sm:p-5">
+        <Panel className="order-first mt-4 border-rose-300 bg-rose-50 p-4 sm:p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex min-w-0 items-start gap-3">
               <CircleAlert className="mt-0.5 shrink-0 text-rose-700" size={19} />
@@ -1523,12 +1685,12 @@ function Dashboard({
           </div>
         </Panel>
       )}
-      {role === "worker" && (
-        <div className="mt-4 grid gap-4 xl:grid-cols-[1.7fr_0.9fr]">
+      {
+        <div className="order-first mt-4 grid gap-4 xl:grid-cols-[1.7fr_0.9fr]">
           <Panel className="p-4 sm:p-5">
             <div className="mb-5 flex items-center justify-between gap-4">
               <div>
-                <h2 className="font-semibold text-[#25332b]">Desk worker dashboard</h2>
+                <h2 className="font-semibold text-[#25332b]">Front desk</h2>
                 <p className="mt-1 text-xs text-[#7a8880]">
                   Today’s front desk queue and room readiness
                 </p>
@@ -1664,7 +1826,7 @@ function Dashboard({
             )}
           </Panel>
         </div>
-      )}
+      }
       <div className="mt-4 grid gap-4 xl:grid-cols-[1.55fr_1fr]">
         <Panel className="p-4 sm:p-5">
           <div className="mb-5 flex items-center justify-between gap-4">
@@ -1869,7 +2031,7 @@ function Dashboard({
           )}
         </Panel>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -2482,20 +2644,20 @@ function HousekeepingPage({ data, role, currentUserName, onCreate, onTaskAction 
   );
 }
 
-function MenuItemDialog({ data, onClose, onSave }) {
-  const [name, setName] = useState("");
-  const [category, setCategory] = useState("");
+function MenuItemDialog({ data, onClose, onSave, preset = null }) {
+  const [name, setName] = useState(preset?.name || "");
+  const [category, setCategory] = useState(preset?.category || "");
   const [description, setDescription] = useState("");
-  const [station, setStation] = useState("kitchen");
+  const [station, setStation] = useState(preset?.station || "kitchen");
   const [priceNaira, setPriceNaira] = useState("");
-  const [recipe, setRecipe] = useState([{ inventoryItemId: data.inventory[0]?.id || "", quantity: "1" }]);
+  const [recipe, setRecipe] = useState(preset ? [] : [{ inventoryItemId: data.inventory[0]?.id || "", quantity: "1" }]);
   const [modifiers, setModifiers] = useState([]);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
   async function submit(event) {
     event.preventDefault();
-    if (!name.trim() || !category.trim() || !priceNaira || recipe.some((line) => !line.inventoryItemId || Number(line.quantity) <= 0)) {
+    if (!name.trim() || !category.trim() || !priceNaira || !recipe.length || recipe.some((line) => !line.inventoryItemId || Number(line.quantity) <= 0)) {
       setError("Enter the menu details and at least one valid recipe ingredient.");
       return;
     }
@@ -2531,7 +2693,7 @@ function MenuItemDialog({ data, onClose, onSave }) {
           <div className="sm:col-span-2"><InputField field={{ name: "description", label: "Description", type: "textarea", required: false }} value={description} onChange={(event) => setDescription(event.target.value)} /></div>
         </div>
         <div className="space-y-3 border-t border-[#e8eeea] pt-4">
-          <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">Recipe</h3><Button type="button" variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => setRecipe((lines) => [...lines, { inventoryItemId: data.inventory[0]?.id || "", quantity: "1" }])}><Plus size={14} />Ingredient</Button></div>
+          <div className="flex items-center justify-between"><div><h3 className="text-sm font-semibold">Recipe</h3>{preset && !data.inventory.length && <p className="mt-1 text-xs text-amber-800">Add the required ingredients to Inventory before setting up this dish.</p>}</div><Button type="button" variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => setRecipe((lines) => [...lines, { inventoryItemId: preset ? "" : data.inventory[0]?.id || "", quantity: "1" }])}><Plus size={14} />Ingredient</Button></div>
           {recipe.map((line, index) => (
             <div key={index} className="grid grid-cols-[1fr_100px_auto] items-end gap-2">
               <InputField field={{ name: `ingredient-${index}`, label: index === 0 ? "Inventory item" : `Ingredient ${index + 1}`, type: "select", options: data.inventory.map((item) => ({ value: item.id, label: `${item.name} · ${item.unit}` })) }} value={line.inventoryItemId} onChange={(event) => setRecipe((lines) => lines.map((item, row) => row === index ? { ...item, inventoryItemId: event.target.value } : item))} />
@@ -2562,7 +2724,8 @@ function FnbOrderDialog({ data, fnbData, onClose, onSave }) {
   const checkedInBookings = data.bookings.filter((booking) => booking.databaseBooking && booking.status === "checked_in");
   const [paymentMethod, setPaymentMethod] = useState(checkedInBookings.length ? "room_charge" : "cash");
   const [bookingId, setBookingId] = useState(checkedInBookings[0]?.id || "");
-  const [source, setSource] = useState(checkedInBookings.length ? "room_service" : "counter");
+  const [source, setSource] = useState(checkedInBookings.length ? "room_service" : "lounge");
+  const [guestName, setGuestName] = useState("");
   const [cart, setCart] = useState([]);
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
@@ -2573,6 +2736,8 @@ function FnbOrderDialog({ data, fnbData, onClose, onSave }) {
     const modifierTotal = (line.modifierIds || []).reduce((total, id) => total + (menuItem?.modifiers.find((modifier) => modifier.id === id)?.priceDeltaKobo || 0), 0);
     return sum + ((menuItem?.priceKobo || 0) + modifierTotal) * line.quantity;
   }, 0);
+  const service = Math.round(subtotal * Number(data.settings.servicePercent || 0) / 100);
+  const vat = Math.round(subtotal * Number(data.settings.vatPercent || 0) / 100);
   function addItem(menuItem) {
     setCart((lines) => {
       const existing = lines.find((line) => line.menuItemId === menuItem.id && !line.modifierIds?.length);
@@ -2595,7 +2760,7 @@ function FnbOrderDialog({ data, fnbData, onClose, onSave }) {
       paymentMethod,
       unitId: booking ? unitFor(data, booking.unitId)?.id : "",
       bookingId: paymentMethod === "room_charge" ? bookingId : "",
-      guestName: booking ? guestFor(data, booking.guestId)?.name : "",
+      guestName: booking ? guestFor(data, booking.guestId)?.name : guestName.trim(),
       notes,
     });
     setSaving(false);
@@ -2606,9 +2771,10 @@ function FnbOrderDialog({ data, fnbData, onClose, onSave }) {
     <ModalFrame title="New food & drink order" description="Stock is deducted when the kitchen/bar accepts the order." onClose={onClose}>
       <form onSubmit={submit} className="space-y-5 p-5 sm:p-6">
         <div className="grid gap-4 sm:grid-cols-2">
-          <InputField field={{ name: "source", label: "Order source", type: "select", options: ["room_service", "restaurant", "bar", "counter", "poolside"].map((value) => ({ value, label: value.replaceAll("_", " ") })) }} value={source} onChange={(event) => setSource(event.target.value)} />
+          <InputField field={{ name: "source", label: "Order source", type: "select", options: ["lounge", "room_service", "restaurant", "bar", "counter", "poolside"].map((value) => ({ value, label: value.replaceAll("_", " ") })) }} value={source} onChange={(event) => setSource(event.target.value)} />
           <InputField field={{ name: "paymentMethod", label: "Payment", type: "select", options: ["room_charge", "cash", "card", "transfer"].map((value) => ({ value, label: value.replaceAll("_", " ") })) }} value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} />
           {paymentMethod === "room_charge" && <div className="sm:col-span-2"><InputField field={{ name: "bookingId", label: "Checked-in booking", type: "select", options: checkedInBookings.map((booking) => ({ value: booking.id, label: `${unitFor(data, booking.unitId)?.number} · ${guestFor(data, booking.guestId)?.name} · ${booking.id}` })) }} value={bookingId} onChange={(event) => setBookingId(event.target.value)} /></div>}
+          {paymentMethod !== "room_charge" && <div className="sm:col-span-2"><InputField field={{ name: "guestName", label: "Guest name (optional)" }} value={guestName} onChange={(event) => setGuestName(event.target.value)} /></div>}
         </div>
         <div className="grid max-h-48 gap-2 overflow-y-auto sm:grid-cols-2">
           {menu.map((item) => <button key={item.id} type="button" onClick={() => addItem(item)} className="flex min-h-12 items-center justify-between gap-2 rounded-lg border border-[#e1e9e3] px-3 py-2 text-left hover:bg-[#f4f7f4]"><span><span className="block text-sm font-medium">{item.name}</span><span className="text-xs text-[#77857d]">{item.category} · {item.station}</span></span><span className="text-sm font-semibold">{formatMoney(item.priceKobo)}</span></button>)}
@@ -2620,7 +2786,7 @@ function FnbOrderDialog({ data, fnbData, onClose, onSave }) {
             const item = menu.find((entry) => entry.id === line.menuItemId);
             return <div key={line.menuItemId} className="space-y-2 rounded-lg bg-[#f7f9f7] p-3"><div className="flex items-center gap-3"><span className="min-w-0 flex-1 text-sm font-medium">{item?.name}</span><input aria-label={`${item?.name} quantity`} type="number" min="1" value={line.quantity} onChange={(event) => setCart((items) => items.map((row) => row.menuItemId === line.menuItemId ? { ...row, quantity: Math.max(1, Number(event.target.value)) } : row))} className="w-16 rounded-md border border-[#dfe7e1] px-2 py-1" /><button type="button" aria-label={`Remove ${item?.name}`} onClick={() => setCart((items) => items.filter((row) => row.menuItemId !== line.menuItemId))}><X size={16} /></button></div>{item?.modifiers.map((modifier) => <label key={modifier.id} className="flex items-center gap-2 text-xs text-[#58685e]"><input type="checkbox" checked={line.modifierIds.includes(modifier.id)} onChange={(event) => setCart((items) => items.map((row) => row.menuItemId === line.menuItemId ? { ...row, modifierIds: event.target.checked ? [...row.modifierIds, modifier.id] : row.modifierIds.filter((id) => id !== modifier.id) } : row))} />{modifier.name}{modifier.priceDeltaKobo ? ` (+${formatMoney(modifier.priceDeltaKobo)})` : ""}</label>)}</div>;
           })}
-          <div className="flex justify-between text-sm font-semibold"><span>Subtotal + VAT + service</span><span>{formatMoney(Math.round(subtotal * 1.125))}</span></div>
+          <div className="flex justify-between text-sm font-semibold"><span>Subtotal + service + VAT</span><span>{formatMoney(subtotal + service + vat)}</span></div>
         </div>
         <InputField field={{ name: "notes", label: "Order notes / allergies", type: "textarea", required: false }} value={notes} onChange={(event) => setNotes(event.target.value)} />
         {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
@@ -4322,6 +4488,22 @@ function App() {
       }
     }
   }
+  async function extendBookingStay(booking) {
+    try {
+      const result = await writeApi(`/api/reservations/${encodeURIComponent(booking.id)}/extend`, "PATCH", {});
+      setData((current) => ({
+        ...current,
+        bookings: current.bookings.map((item) => item.id === booking.id ? { ...item, ...result, databaseBooking: true } : item),
+        invoices: current.invoices.map((invoice) => invoice.bookingId === booking.id
+          ? { ...invoice, totalKobo: result.totalKobo, status: invoice.paidKobo >= result.totalKobo ? "paid" : "issued" }
+          : invoice),
+      }));
+      writeAudit("booking", booking.id, "extended one night", booking, result);
+      notify(`${booking.id} extended to ${formatDate(result.checkOut)}.`);
+    } catch (error) {
+      notify(error.message);
+    }
+  }
   async function markNotificationRead(notification) {
     try {
       await writeApi(`/api/notifications/${encodeURIComponent(notification.id)}/read`, "PATCH", {});
@@ -5529,16 +5711,13 @@ function App() {
     0,
   );
   const unreadSystemNotifications = systemNotifications.filter((notification) => !notification.read);
-  const checkoutFollowUps = role === "worker" && lagosClock.time >= "13:00"
-    ? data.bookings.filter((booking) =>
-        booking.status === "checked_in" && booking.checkOut === lagosClock.date,
-      )
-    : [];
-  const housekeepingPrepAlerts = ["worker", "manager"].includes(role) &&
-    lagosClock.time >= "11:30" && lagosClock.time < "13:00"
-    ? data.bookings.filter((booking) =>
-        booking.status === "checked_in" && booking.checkOut === lagosClock.date,
-      )
+  const todayCheckouts = data.bookings.filter((booking) =>
+    booking.databaseBooking && booking.status === "checked_in" && booking.checkOut === lagosClock.date,
+  );
+  const checkoutCalls = lagosClock.time >= "11:00" && lagosClock.time < "12:00" ? todayCheckouts : [];
+  const checkoutFollowUps = lagosClock.time >= "12:00" ? todayCheckouts : [];
+  const housekeepingPrepAlerts = lagosClock.time >= "11:30" && lagosClock.time < "13:00"
+    ? todayCheckouts
     : [];
   const currentUser =
     data.users.find((user) => user.id === currentUserId) || data.users[0];
@@ -5550,6 +5729,25 @@ function App() {
         .filter(([key]) => key !== "financials" || role !== "worker"),
     }))
     .filter((group) => group.items.length);
+  const primaryNavKeys = new Set(["dashboard", "bookings", "rooms", "calendar", "housekeeping", "restaurant"]);
+  const primaryNavGroups = visibleNavGroups
+    .map((group) => ({ ...group, items: group.items.filter(([key]) => primaryNavKeys.has(key)) }))
+    .filter((group) => group.items.length);
+  const moreNavGroups = visibleNavGroups
+    .map((group) => ({ ...group, items: group.items.filter(([key]) => !primaryNavKeys.has(key)) }))
+    .filter((group) => group.items.length);
+  const moreNavigationActive = moreNavGroups.some((group) => group.items.some(([key]) => key === page));
+  const renderNavGroups = (groups) => groups.map((group) => (
+    <div key={group.label}>
+      <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#9aa69f]">{group.label}</p>
+      {group.items.map(([key, label, Icon]) => (
+        <button key={key} onClick={() => navigate(key)} className={`mb-0.5 flex min-h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-[13px] font-medium transition ${page === key ? "bg-[#eaf58a] text-[#29320b]" : "text-[#647269] hover:bg-[#f3f7f4] hover:text-[#26342d]"}`}>
+          <Icon size={17} strokeWidth={1.8} /><span className="flex-1">{label}</span>
+          {key === "messages" && unread > 0 && <span className="grid size-5 place-items-center rounded-full bg-[#d9484f] text-[10px] font-semibold text-white">{unread}</span>}
+        </button>
+      ))}
+    </div>
+  ));
   function exportCurrentView() {
     const exports = {
       bookings: [
@@ -5649,11 +5847,18 @@ function App() {
       content = (
         <Dashboard
           data={data}
-          role={role}
+          databaseRooms={databaseRooms}
+          fnbData={fnbData}
+          fnbLoading={fnbLoading}
           userName={currentUser.name}
           onNavigate={navigate}
           onCreate={requestCreate}
           onBookingAction={bookingAction}
+          onExtendBooking={extendBookingStay}
+          onSaveFnbOrder={createFnbOrder}
+          canAddMenu={allowed(role, "stock")}
+          onAddMenu={(preset = null) => setModal({ type: "fnbMenu", record: preset })}
+          checkoutCalls={checkoutCalls}
           housekeepingPrepAlerts={housekeepingPrepAlerts}
           checkoutFollowUps={checkoutFollowUps}
         />
@@ -5719,7 +5924,7 @@ function App() {
           fnbData={fnbData}
           role={role}
           loading={fnbLoading}
-          onAddMenu={() => setModal({ type: "fnbMenu" })}
+          onAddMenu={(preset = null) => setModal({ type: "fnbMenu", record: preset })}
           onNewOrder={() => setModal({ type: "fnbOrder" })}
           onStatus={updateFnbOrder}
           onAvailability={updateMenuAvailability}
@@ -5872,11 +6077,20 @@ function App() {
       content = (
         <Dashboard
           data={data}
-          role={role}
+          databaseRooms={databaseRooms}
+          fnbData={fnbData}
+          fnbLoading={fnbLoading}
           userName={currentUser.name}
           onNavigate={navigate}
           onCreate={requestCreate}
           onBookingAction={bookingAction}
+          onExtendBooking={extendBookingStay}
+          onSaveFnbOrder={createFnbOrder}
+          canAddMenu={allowed(role, "stock")}
+          onAddMenu={(preset = null) => setModal({ type: "fnbMenu", record: preset })}
+          checkoutCalls={checkoutCalls}
+          housekeepingPrepAlerts={housekeepingPrepAlerts}
+          checkoutFollowUps={checkoutFollowUps}
         />
       );
   }
@@ -5915,46 +6129,15 @@ function App() {
             className="min-h-0 flex-1 space-y-5 overflow-y-auto"
             aria-label="Main navigation"
           >
-            {visibleNavGroups.map((group) => (
-              <div key={group.label}>
-                <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#9aa69f]">
-                  {group.label}
-                </p>
-                {group.items.map(([key, label, Icon]) => (
-                  <button
-                    key={key}
-                    onClick={() => navigate(key)}
-                    className={`mb-0.5 flex min-h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-[13px] font-medium transition ${page === key ? "bg-[#eaf58a] text-[#29320b]" : "text-[#647269] hover:bg-[#f3f7f4] hover:text-[#26342d]"}`}
-                  >
-                    <Icon size={17} strokeWidth={1.8} />
-                    <span className="flex-1">{label}</span>
-                    {key === "messages" && unread > 0 && (
-                      <span className="grid size-5 place-items-center rounded-full bg-[#d9484f] text-[10px] font-semibold text-white">
-                        {unread}
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            ))}
+            {renderNavGroups(primaryNavGroups)}
+            {moreNavGroups.length > 0 && <details open={moreNavigationActive || undefined} className="border-t border-[#e7eee8] pt-3">
+              <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between rounded-lg px-3 text-sm font-semibold text-[#526157] hover:bg-[#f3f7f4]">
+                More tools <ChevronDown size={16} />
+              </summary>
+              <div className="mt-3 space-y-4">{renderNavGroups(moreNavGroups)}</div>
+            </details>}
           </nav>
-          <div className="mt-4 rounded-xl bg-[#e1f3e8] p-4">
-            <div className="mb-3 grid size-8 place-items-center rounded-lg bg-white/70 text-[#176b54]">
-              <Sparkles size={17} />
-            </div>
-            <p className="text-sm font-semibold text-[#214832]">
-              Guest-ready, every day
-            </p>
-            <p className="mt-1 text-xs leading-5 text-[#4f7560]">
-              Keep arrivals, rooms, and teams moving together.
-            </p>
-            <button
-              onClick={() => navigate("team")}
-              className="mt-3 text-xs font-semibold text-[#176b54] hover:underline"
-            >
-              Property settings <ArrowRight size={12} className="ml-1 inline" />
-            </button>
-          </div>
+          <Button className="mt-4 w-full" onClick={() => requestCreate("booking")}><Plus size={16} />Book a room</Button>
         </aside>
         <div className="min-w-0 flex-1">
           <header className="sticky top-0 z-30 flex h-[68px] items-center gap-3 border-b border-[#e4ebe6] bg-white/95 px-4 backdrop-blur sm:px-6 lg:px-8">
@@ -6091,7 +6274,7 @@ function App() {
           {!isOnline && <div role="status" className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900 sm:px-6 lg:px-8"><CircleAlert size={15} />You’re offline. This demo keeps changes on this device; production sync is not connected.</div>}
           {mobileNavOpen && (
             <nav className="flex gap-1 overflow-x-auto border-b border-[#e4ebe6] bg-white px-3 py-2 lg:hidden">
-              {visibleNavGroups
+              {primaryNavGroups
                 .flatMap((group) => group.items)
                 .map(([key, label, Icon]) => (
                   <button
@@ -6103,6 +6286,14 @@ function App() {
                     {label}
                   </button>
                 ))}
+              {moreNavGroups.length > 0 && <details className="relative shrink-0">
+                <summary className="inline-flex min-h-9 cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[#647269] hover:bg-[#f3f7f4]">
+                  More <ChevronDown size={14} />
+                </summary>
+                <div className="absolute right-0 top-full z-40 mt-1 max-h-[60vh] w-56 overflow-y-auto rounded-lg border border-[#e2e9e4] bg-white p-2 shadow-xl">
+                  {renderNavGroups(moreNavGroups)}
+                </div>
+              </details>}
             </nav>
           )}
           <main className="mx-auto w-full max-w-[1680px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
@@ -6120,7 +6311,7 @@ function App() {
         </div>
       )}
       {modal?.type === "fnbMenu" ? (
-        <MenuItemDialog data={data} onClose={() => setModal(null)} onSave={saveMenuItem} />
+        <MenuItemDialog data={data} preset={modal.record} onClose={() => setModal(null)} onSave={saveMenuItem} />
       ) : modal?.type === "fnbOrder" ? (
         <FnbOrderDialog data={data} fnbData={fnbData} onClose={() => setModal(null)} onSave={createFnbOrder} />
       ) : modal?.type === "fnbRefund" ? (

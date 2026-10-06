@@ -5,6 +5,7 @@ import { registerFnbRoutes } from "../fnb-api.js";
 import { syncLowStockNotifications } from "../inventory-alerts.js";
 import { registerOperationsRoutes } from "../operations-api.js";
 import { registerWorkspaceRoutes } from "../workspace-api.js";
+import { registerReservationWorkflowRoutes, workerMayCheckOut } from "../reservation-workflow-api.js";
 import { createRouteApp, createTestDatabase, seedFnb } from "./helpers.js";
 
 const propertyId = "property_boms";
@@ -13,10 +14,10 @@ function headers(role = "worker", name = "Test User") {
   return { "x-test-role": role, "x-test-user-name": name };
 }
 
-function createCashFnbOrder(app) {
+function createCashFnbOrder(app, extra = {}) {
   const created = app.call("POST", "/api/fnb/orders", {
     headers: headers(),
-    body: { items: [{ menuItemId: "menu-rice", quantity: 2 }], paymentMethod: "cash" },
+    body: { items: [{ menuItemId: "menu-rice", quantity: 2 }], paymentMethod: "cash", ...extra },
   });
   assert.equal(created.code, 201);
   return created.body;
@@ -47,6 +48,20 @@ test("F&B acceptance deducts recipe stock exactly once", () => {
   database.close();
 });
 
+test("lounge orders save a personal guest name and cash payment method", () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  seedFnb(database);
+  registerFnbRoutes(app, database, propertyId);
+
+  const order = createCashFnbOrder(app, { source: "lounge", guestName: "Lounge guest" });
+
+  assert.equal(order.source, "lounge");
+  assert.equal(order.guestName, "Lounge guest");
+  assert.equal(order.paymentMethod, "cash");
+  database.close();
+});
+
 test("billed room-charge order updates the folio without cash payment", () => {
   const database = createTestDatabase();
   const app = createRouteApp();
@@ -73,6 +88,80 @@ test("billed room-charge order updates the folio without cash payment", () => {
   assert.equal(database.prepare("SELECT method FROM fnb_order_payments WHERE order_id = ?").get(order.id).method, "room_charge");
   assert.equal(database.prepare("SELECT count(*) AS count FROM payments").get().count, 0);
   database.close();
+});
+
+test("worker can extend a checked-in stay by one night between 11 and noon", () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  database.prepare("INSERT INTO units (id, property_id, number) VALUES ('unit-1', ?, '101')").run(propertyId);
+  database.prepare(`
+    INSERT INTO bookings (
+      id, property_id, unit_id, status, check_in, check_out, nights, rate_kobo,
+      subtotal_kobo, service_kobo, vat_kobo, total_kobo
+    ) VALUES ('booking-1', ?, 'unit-1', 'checked_in', '2026-10-05', '2026-10-06', 1, 10000, 10000, 0, 0, 10000)
+  `).run(propertyId);
+  database.prepare("INSERT INTO invoices (id, property_id, booking_id, total_kobo, paid_kobo, status) VALUES ('invoice-1', ?, 'booking-1', 10000, 10000, 'paid')").run(propertyId);
+  registerReservationWorkflowRoutes(app, database, propertyId, {
+    getDateTime: () => ({ date: "2026-10-06", time: "11:15" }),
+  });
+
+  const extended = app.call("PATCH", "/api/reservations/booking-1/extend", { headers: headers() });
+
+  assert.equal(extended.code, 200, extended.body?.error);
+  assert.equal(extended.body.checkOut, "2026-10-07");
+  assert.equal(extended.body.nights, 2);
+  assert.equal(extended.body.totalKobo, 20000);
+  assert.equal(database.prepare("SELECT total_kobo FROM invoices WHERE id = 'invoice-1'").get().total_kobo, 20000);
+  assert.equal(database.prepare("SELECT action FROM audit_logs WHERE entity_id = 'booking-1'").get().action, "extended_one_night");
+  database.close();
+});
+
+test("worker stay extension is limited to the call window and rejects overlaps", () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  database.prepare("INSERT INTO units (id, property_id, number) VALUES ('unit-1', ?, '101')").run(propertyId);
+  database.prepare(`
+    INSERT INTO bookings (
+      id, property_id, unit_id, status, check_in, check_out, nights, rate_kobo,
+      subtotal_kobo, total_kobo
+    ) VALUES ('booking-1', ?, 'unit-1', 'checked_in', '2026-10-05', '2026-10-06', 1, 10000, 10000, 10000)
+  `).run(propertyId);
+  database.prepare(`
+    INSERT INTO bookings (id, property_id, unit_id, status, check_in, check_out)
+    VALUES ('booking-2', ?, 'unit-1', 'confirmed', '2026-10-06', '2026-10-07')
+  `).run(propertyId);
+  registerReservationWorkflowRoutes(app, database, propertyId, {
+    getDateTime: () => ({ date: "2026-10-06", time: "11:30" }),
+  });
+
+  const conflict = app.call("PATCH", "/api/reservations/booking-1/extend", { headers: headers() });
+  assert.equal(conflict.code, 409);
+  assert.match(conflict.body.error, /already booked/);
+  assert.equal(database.prepare("SELECT check_out FROM bookings WHERE id = 'booking-1'").get().check_out, "2026-10-06");
+  database.close();
+
+  const beforeWindowDatabase = createTestDatabase();
+  const beforeWindowApp = createRouteApp();
+  beforeWindowDatabase.prepare("INSERT INTO units (id, property_id, number) VALUES ('unit-1', ?, '101')").run(propertyId);
+  beforeWindowDatabase.prepare(`
+    INSERT INTO bookings (
+      id, property_id, unit_id, status, check_in, check_out, nights, rate_kobo,
+      subtotal_kobo, total_kobo
+    ) VALUES ('booking-1', ?, 'unit-1', 'checked_in', '2026-10-05', '2026-10-06', 1, 10000, 10000, 10000)
+  `).run(propertyId);
+  registerReservationWorkflowRoutes(beforeWindowApp, beforeWindowDatabase, propertyId, {
+    getDateTime: () => ({ date: "2026-10-06", time: "10:59" }),
+  });
+  assert.equal(beforeWindowApp.call("PATCH", "/api/reservations/booking-1/extend", { headers: headers() }).code, 409);
+  beforeWindowDatabase.close();
+});
+
+test("worker can check out only after noon on the due date with no balance", () => {
+  assert.equal(workerMayCheckOut("checked_in", "2026-10-06", "2026-10-06", "12:00", 0), true);
+  assert.equal(workerMayCheckOut("checked_in", "2026-10-06", "2026-10-06", "11:59", 0), false);
+  assert.equal(workerMayCheckOut("checked_in", "2026-10-06", "2026-10-07", "12:00", 0), false);
+  assert.equal(workerMayCheckOut("checked_in", "2026-10-06", "2026-10-06", "12:00", 100), false);
+  assert.equal(workerMayCheckOut("cancelled", "2026-10-06", "2026-10-06", "12:00", 0), false);
 });
 
 test("room payment refunds create a linked reversal and update paid balance", () => {

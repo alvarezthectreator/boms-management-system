@@ -41,6 +41,81 @@ export const roomTypes = [
   },
 ];
 
+export const featuredFoodMenu = [
+  {
+    id: "noodles",
+    name: "Noodles",
+    category: "Noodles",
+    imageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/7/71/Noodles_with_Omelette.jpg/500px-Noodles_with_Omelette.jpg",
+    imageCredit: "Gaurav Dhwaj Khadka",
+    imageSource: "https://commons.wikimedia.org/wiki/File:Noodles_with_Omelette.jpg",
+  },
+  {
+    id: "jollof-rice",
+    name: "Jollof rice",
+    category: "Rice",
+    imageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/Jollof_rice_with_vegetable.jpg/500px-Jollof_rice_with_vegetable.jpg",
+    imageCredit: "Segun Famisa",
+    imageSource: "https://commons.wikimedia.org/wiki/File:Jollof_rice_with_vegetable.jpg",
+  },
+  {
+    id: "spaghetti",
+    name: "Spaghetti",
+    category: "Pasta",
+    imageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/7/72/Plate_of_spaghetti_jollof.jpg/500px-Plate_of_spaghetti_jollof.jpg",
+    imageCredit: "Bukky658",
+    imageSource: "https://commons.wikimedia.org/wiki/File:Plate_of_spaghetti_jollof.jpg",
+  },
+  {
+    id: "white-rice",
+    name: "White rice",
+    category: "Rice",
+    imageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/89/Rice_in_the_plate.jpg/500px-Rice_in_the_plate.jpg",
+    imageCredit: "Zahraswaty",
+    imageSource: "https://commons.wikimedia.org/wiki/File:Rice_in_the_plate.jpg",
+  },
+  {
+    id: "chicken-pepper-soup",
+    name: "Chicken pepper soup",
+    category: "Soups",
+    imageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/5/57/Chicken_pepper_soup.jpg/500px-Chicken_pepper_soup.jpg",
+    imageCredit: "NiferO",
+    imageSource: "https://commons.wikimedia.org/wiki/File:Chicken_pepper_soup.jpg",
+  },
+  {
+    id: "catfish-pepper-soup",
+    name: "Catfish pepper soup",
+    category: "Soups",
+    imageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Cat_fish_pepper_soup_with_curry_leaf.jpg/500px-Cat_fish_pepper_soup_with_curry_leaf.jpg",
+    imageCredit: "Omolarabasirat",
+    imageSource: "https://commons.wikimedia.org/wiki/File:Cat_fish_pepper_soup_with_curry_leaf.jpg",
+  },
+  {
+    id: "ea-pepper-soup",
+    name: "EA pepper soup",
+    category: "Soups",
+    imageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/5/54/Meat_pepper_soup.jpg/500px-Meat_pepper_soup.jpg",
+    imageCredit: "Don miraj",
+    imageSource: "https://commons.wikimedia.org/wiki/File:Meat_pepper_soup.jpg",
+  },
+  {
+    id: "afang-soup",
+    name: "Afang soup",
+    category: "Soups",
+    imageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/5/58/Afang_Soup.jpg/500px-Afang_Soup.jpg",
+    imageCredit: "Yemisi Ogbe",
+    imageSource: "https://commons.wikimedia.org/wiki/File:Afang_Soup.jpg",
+  },
+  {
+    id: "egusi-soup",
+    name: "Egusi soup",
+    category: "Soups",
+    imageUrl: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/89/Egusi_soup_in_a_plate.jpg/500px-Egusi_soup_in_a_plate.jpg",
+    imageCredit: "Tesleemah",
+    imageSource: "https://commons.wikimedia.org/wiki/File:Egusi_soup_in_a_plate.jpg",
+  },
+];
+
 export function createInitialData() {
   return {
     roomTypes,
@@ -809,13 +884,16 @@ export function buildDeskWorkerDashboardSummary(
 
   const guestById = new Map(guests.map((guest) => [guest.id, guest]));
   const unitById = new Map(units.map((unit) => [unit.id, unit]));
+  const roomsBookedToday = new Set(bookings.filter((booking) =>
+    unitById.has(booking.unitId) &&
+    ["hold", "confirmed", "checked_in"].includes(booking.status) &&
+    booking.checkIn <= today &&
+    (booking.checkOut > today || (booking.status === "checked_in" && booking.checkOut === today)),
+  ).map((booking) => booking.unitId)).size;
 
   const arrivalsToday = bookings.filter(
     (booking) => booking.checkIn === today && booking.status === "confirmed",
   );
-  const roomsBooked = bookings.filter((booking) =>
-    ["hold", "confirmed", "checked_in"].includes(booking.status),
-  ).length;
   const departuresToday = bookings.filter(
     (booking) => booking.checkOut === today && booking.status === "checked_in",
   );
@@ -839,7 +917,7 @@ export function buildDeskWorkerDashboardSummary(
   }));
 
   return {
-    roomsBooked,
+    roomsBookedToday,
     arrivalsToday: arrivalQueue.length,
     departuresToday: departureQueue.length,
     readyRooms,

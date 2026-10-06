@@ -28,8 +28,13 @@ export function createTestDatabase() {
     );
     CREATE TABLE guests (id TEXT PRIMARY KEY, property_id TEXT, full_name TEXT, deleted_at TEXT);
     CREATE TABLE units (id TEXT PRIMARY KEY, property_id TEXT, number TEXT, deleted_at TEXT);
+    CREATE TABLE out_of_order_blocks (
+      id TEXT PRIMARY KEY, property_id TEXT, unit_id TEXT, start_date TEXT,
+      end_date TEXT, deleted_at TEXT
+    );
     CREATE TABLE bookings (
       id TEXT PRIMARY KEY, property_id TEXT, guest_id TEXT, unit_id TEXT, status TEXT,
+      check_in TEXT, check_out TEXT, nights INTEGER DEFAULT 0, rate_kobo INTEGER DEFAULT 0,
       subtotal_kobo INTEGER DEFAULT 0, discount_kobo INTEGER DEFAULT 0,
       service_kobo INTEGER DEFAULT 0, vat_kobo INTEGER DEFAULT 0, total_kobo INTEGER DEFAULT 0,
       updated_at TEXT, deleted_at TEXT

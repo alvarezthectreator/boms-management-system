@@ -287,7 +287,7 @@ export function registerFnbRoutes(app, database, propertyId) {
     if (!requireRole(request, response, ["worker", ...managementRoles])) return;
     const { items, source = "room_service", unitId = "", bookingId = "", guestName = "", paymentMethod = "room_charge" } = request.body;
     if (!Array.isArray(items) || !items.length) return response.status(400).json({ error: "Add at least one menu item." });
-    if (!["room_service", "restaurant", "bar", "counter", "poolside"].includes(source)) return response.status(400).json({ error: "Select a valid order source." });
+    if (!["room_service", "restaurant", "bar", "counter", "poolside", "lounge"].includes(source)) return response.status(400).json({ error: "Select a valid order source." });
     if (!["room_charge", "cash", "card", "transfer"].includes(paymentMethod)) return response.status(400).json({ error: "Select a valid payment method." });
     try {
       const transaction = database.transaction(() => {

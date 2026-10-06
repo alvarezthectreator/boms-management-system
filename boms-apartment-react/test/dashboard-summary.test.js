@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildDeskWorkerDashboardSummary, buildRouteForPage, calculateQuote, createInitialData, defaultCheckoutDate, nightsBetween, resolvePageFromRoute } from "../src/data.js";
+import { buildDeskWorkerDashboardSummary, buildRouteForPage, calculateQuote, createInitialData, defaultCheckoutDate, featuredFoodMenu, nightsBetween, resolvePageFromRoute } from "../src/data.js";
 
 test("routes resolve to stable page URLs", () => {
   assert.equal(buildRouteForPage("dashboard"), "/dashboard");
@@ -27,18 +27,40 @@ test("default checkout is one night after check-in", () => {
   assert.equal(nightsBetween(checkIn, checkOut), 1);
 });
 
-test("desk worker summary counts active room reservations", () => {
-  const summary = buildDeskWorkerDashboardSummary({
-    bookings: [
-      { status: "hold" },
-      { status: "confirmed" },
-      { status: "checked_in" },
-      { status: "checked_out" },
-      { status: "cancelled" },
-    ],
-  });
+test("featured food menu contains the requested dishes with attributed photos", () => {
+  assert.deepEqual(featuredFoodMenu.map((item) => item.name), [
+    "Noodles",
+    "Jollof rice",
+    "Spaghetti",
+    "White rice",
+    "Chicken pepper soup",
+    "Catfish pepper soup",
+    "EA pepper soup",
+    "Afang soup",
+    "Egusi soup",
+  ]);
+  assert.ok(featuredFoodMenu.every((item) => item.imageUrl && item.imageCredit && item.imageSource));
+});
 
-  assert.equal(summary.roomsBooked, 3);
+test("desk worker summary counts distinct rooms occupied today", () => {
+  const summary = buildDeskWorkerDashboardSummary({
+    units: [
+      { id: "room-1" },
+      { id: "room-2" },
+      { id: "room-3" },
+      { id: "room-4" },
+    ],
+    bookings: [
+      { unitId: "room-1", checkIn: "2026-10-06", checkOut: "2026-10-07", status: "confirmed" },
+      { unitId: "room-1", checkIn: "2026-10-06", checkOut: "2026-10-08", status: "hold" },
+      { unitId: "room-2", checkIn: "2026-10-05", checkOut: "2026-10-06", status: "checked_in" },
+      { unitId: "room-3", checkIn: "2026-10-07", checkOut: "2026-10-08", status: "confirmed" },
+      { unitId: "room-4", checkIn: "2026-10-05", checkOut: "2026-10-06", status: "checked_out" },
+      { unitId: "unknown-room", checkIn: "2026-10-06", checkOut: "2026-10-08", status: "confirmed" },
+    ],
+  }, "2026-10-06");
+
+  assert.equal(summary.roomsBookedToday, 2);
 });
 
 test("desk worker summary highlights arrivals, departures, and ready rooms", () => {
