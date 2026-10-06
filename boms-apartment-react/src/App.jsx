@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -16,6 +16,7 @@ import {
   CreditCard,
   Download,
   FileText,
+  ImagePlus,
   LayoutDashboard,
   LogOut,
   Mail,
@@ -23,6 +24,7 @@ import {
   MessageSquare,
   MoreHorizontal,
   Package,
+  PhoneCall,
   Plus,
   Printer,
   Search,
@@ -34,24 +36,43 @@ import {
   Sparkles,
   Star,
   TrendingUp,
+  Utensils,
+  Upload,
   UserRound,
   Users,
   Wallet,
   X,
 } from "lucide-react";
 import {
+  buildDeskWorkerDashboardSummary,
+  appRoutes,
+  buildRouteForPage,
   calculateQuote,
   createInitialData,
+  defaultCheckoutDate,
   formatDate,
   formatMoney,
   getNightlyRates,
   isUnitAvailable,
   makeCode,
   nightsBetween,
+  resolvePageFromRoute,
 } from "./data.js";
 
 const STORAGE_KEY = "boms-hotel-demo-v1";
-const TODAY = new Intl.DateTimeFormat("sv-SE", { timeZone: "Africa/Lagos" }).format(new Date());
+function getLagosDateTime() {
+  const now = new Date();
+  return {
+    date: new Intl.DateTimeFormat("sv-SE", { timeZone: "Africa/Lagos" }).format(now),
+    time: new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Africa/Lagos",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(now),
+  };
+}
+const TODAY = getLagosDateTime().date;
 const getTimestamp = () => new Date().toISOString();
 const roleActions = {
   worker: [
@@ -60,6 +81,7 @@ const roleActions = {
     "checkout_paid",
     "housekeeping",
     "stock_use",
+    "fnb_order",
     "message",
     "concierge",
   ],
@@ -99,6 +121,7 @@ const navGroups = [
     label: "Operations",
     items: [
       ["housekeeping", "Housekeeping", ClipboardList],
+      ["restaurant", "Food & drink", Utensils],
       ["inventory", "Inventory", Package],
       ["purchasing", "Purchasing", ShoppingCart],
     ],
@@ -137,7 +160,21 @@ function readDemoData() {
     const defaults = createInitialData();
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (!stored) return defaults;
-    return { ...defaults, ...stored, settings: { ...defaults.settings, ...stored.settings }, auditLogs: stored.auditLogs || [], blocks: stored.blocks || [] };
+    const users = (stored.users || defaults.users).map((user) =>
+      user.id === "USR-002" ? { ...user, name: "Ewilliam Ndamiye" } : user,
+    );
+    return {
+      ...defaults,
+      ...stored,
+      users,
+      settings: {
+        ...defaults.settings,
+        ...stored.settings,
+        checkOutTime: "12:00",
+      },
+      auditLogs: stored.auditLogs || [],
+      blocks: stored.blocks || [],
+    };
   } catch {
     return createInitialData();
   }
@@ -172,6 +209,12 @@ function roomTypeFor(data, typeId) {
 
 function balanceFor(booking) {
   return Math.max(0, (booking.totalKobo || 0) - (booking.paidKobo || 0));
+}
+
+function mergeById(localRows, databaseRows) {
+  const rows = new Map(localRows.map((row) => [row.id, row]));
+  for (const row of databaseRows) rows.set(row.id, row);
+  return [...rows.values()];
 }
 
 function Status({ value }) {
@@ -447,7 +490,7 @@ function InputField({ field, value, onChange }) {
 const roomOptionList = (data) =>
   data.roomTypes.map((type) => ({
     value: type.id,
-    label: `${type.name} · ${type.size} m²`,
+    label: type.size ? `${type.name} · ${type.size} m²` : type.name,
   }));
 const guestOptionList = (data) =>
   data.guests.map((guest) => ({
@@ -466,11 +509,22 @@ const staffOptionList = (data) =>
 
 function BookingDialog({ data, role, onClose, onSave, record }) {
   const initialCheckIn = record?.checkIn || TODAY;
-  const initialCheckOut = new Date(Date.parse(`${initialCheckIn}T00:00:00Z`) + 2 * 86400000).toISOString().slice(0, 10);
+  const initialCheckOut = record?.checkOut || defaultCheckoutDate(initialCheckIn);
   const [checkIn, setCheckIn] = useState(initialCheckIn);
   const [checkOut, setCheckOut] = useState(initialCheckOut);
   const initialUnit = record && unitFor(data, record.unitId);
-  const [roomTypeId, setRoomTypeId] = useState(initialUnit?.roomTypeId || data.roomTypes[0]?.id || "");
+  const managedRoomTypes = data.roomTypes.filter((type) =>
+    data.units.some((unit) => unit.databaseRoom && unit.roomTypeId === type.id),
+  );
+  const bookingRoomTypes = record && !initialUnit?.databaseRoom
+    ? data.roomTypes.filter((type) => type.id === initialUnit?.roomTypeId)
+    : managedRoomTypes.length
+      ? managedRoomTypes
+      : data.roomTypes;
+  const [roomTypeId, setRoomTypeId] = useState(initialUnit?.roomTypeId || managedRoomTypes[0]?.id || data.roomTypes[0]?.id || "");
+  const effectiveRoomTypeId = bookingRoomTypes.some((type) => type.id === roomTypeId)
+    ? roomTypeId
+    : bookingRoomTypes[0]?.id || "";
   const [unitId, setUnitId] = useState(record?.unitId || "");
   const [guestId, setGuestId] = useState(record?.guestId || data.guests[0]?.id || "");
   const [adults, setAdults] = useState(record?.adults || 1);
@@ -483,7 +537,8 @@ function BookingDialog({ data, role, onClose, onSave, record }) {
   const nights = nightsBetween(checkIn, checkOut);
   const candidates = data.units.filter(
     (unit) =>
-      unit.roomTypeId === roomTypeId &&
+      ((unit.databaseRoom && unit.rateKobo > 0) || unit.id === record?.unitId) &&
+      unit.roomTypeId === effectiveRoomTypeId &&
       isUnitAvailable(
         unit,
         checkIn,
@@ -533,7 +588,7 @@ function BookingDialog({ data, role, onClose, onSave, record }) {
     onSave({
       recordId: record?.id,
       guestId,
-      roomTypeId,
+      roomTypeId: selectedUnit.roomTypeId,
       unitId: selectedUnit.id,
       checkIn,
       checkOut,
@@ -568,14 +623,19 @@ function BookingDialog({ data, role, onClose, onSave, record }) {
               name: "roomTypeId",
               label: "Room type",
               type: "select",
-              options: roomOptionList(data),
+              options: roomOptionList({ ...data, roomTypes: bookingRoomTypes }),
             }}
-            value={roomTypeId}
+            value={effectiveRoomTypeId}
             onChange={(event) => {
               setRoomTypeId(event.target.value);
               setUnitId("");
             }}
           />
+          {!data.units.some((unit) => unit.databaseRoom && unit.rateKobo > 0) && (
+            <p className="text-sm text-amber-800 sm:col-span-2">
+              An admin must enter each room’s nightly rate before it can be reserved.
+            </p>
+          )}
           <InputField
             field={{
               name: "checkIn",
@@ -728,6 +788,111 @@ function BookingDialog({ data, role, onClose, onSave, record }) {
   );
 }
 
+function RoomEditorDialog({ room, onClose, onSave }) {
+  const [imageUrl, setImageUrl] = useState(room.images?.[0] || "");
+  const [imageDataUrl, setImageDataUrl] = useState("");
+  const [rateNaira, setRateNaira] = useState(
+    room.rateKobo ? String(room.rateKobo / 100) : "",
+  );
+  const [sharedBedType, setSharedBedType] = useState(room.bedType || "");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function chooseImage(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/") || file.size > 5 * 1024 * 1024) {
+      setError("Choose an image no larger than 5 MB.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setImageDataUrl(String(reader.result || ""));
+      setImageUrl("");
+      setError("");
+    };
+    reader.onerror = () => setError("The selected image could not be read.");
+    reader.readAsDataURL(file);
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    if (!imageDataUrl && !imageUrl.trim()) {
+      setError("Choose an image or enter an HTTPS image URL.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    const result = await onSave(room, {
+      imageDataUrl,
+      imageUrl: imageDataUrl ? "" : imageUrl.trim(),
+      rateNaira,
+      sharedBedType: sharedBedType.trim() || undefined,
+    });
+    setSaving(false);
+    if (result?.error) setError(result.error);
+    else onClose();
+  }
+
+  return (
+    <ModalFrame
+      title={`Edit ${room.name}`}
+      description="Room photos and rates are saved to the hotel database."
+      onClose={onClose}
+    >
+      <form onSubmit={submit} className="space-y-5 p-5 sm:p-6">
+        <div className="aspect-[16/9] overflow-hidden rounded-lg bg-[#edf2ed]">
+          {(imageDataUrl || imageUrl) && (
+            <img
+              src={imageDataUrl || imageUrl}
+              alt={`${room.name} room preview`}
+              className="h-full w-full object-cover"
+            />
+          )}
+        </div>
+        <label className="block text-sm font-medium text-[#34443a]">
+          Upload a room photo
+          <span className="mt-1 block text-xs font-normal text-[#718078]">JPG, PNG, or WebP. Maximum 5 MB.</span>
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={chooseImage}
+            className="mt-2 block w-full text-sm text-[#59695f] file:mr-3 file:rounded-md file:border-0 file:bg-[#edf3ef] file:px-3 file:py-2 file:font-medium file:text-[#284237]"
+          />
+        </label>
+        <InputField
+          field={{ name: "imageUrl", label: "Or use an HTTPS image URL", required: false, type: "url" }}
+          value={imageUrl}
+          onChange={(event) => {
+            setImageUrl(event.target.value);
+            setImageDataUrl("");
+          }}
+        />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <InputField
+            field={{ name: "rateNaira", label: "Nightly rate (₦)", type: "number", min: 1, required: false }}
+            value={rateNaira}
+            onChange={(event) => setRateNaira(event.target.value)}
+          />
+          <InputField
+            field={{ name: "sharedBedType", label: "Shared bed size for all rooms", placeholder: "e.g. Queen bed", required: false }}
+            value={sharedBedType}
+            onChange={(event) => setSharedBedType(event.target.value)}
+          />
+        </div>
+        <p className="text-xs text-[#718078]">Maximum occupancy is fixed at 3 guests per room.</p>
+        {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button type="submit" disabled={saving}>
+            {saving ? "Saving…" : <><Upload size={16} />Save room</>}
+          </Button>
+        </div>
+      </form>
+    </ModalFrame>
+  );
+}
+
 function RecordDialog({ type, data, onClose, onSave, record }) {
   const configurations = {
     guest: {
@@ -835,7 +1000,7 @@ function RecordDialog({ type, data, onClose, onSave, record }) {
           name: "category",
           label: "Category",
           type: "select",
-          options: ["Linen", "Food", "Supplies", "Maintenance"].map(
+          options: ["Food", "Drinks", "Minibar", "Linen", "Supplies", "Maintenance"].map(
             (value) => ({ value, label: value }),
           ),
         },
@@ -869,7 +1034,30 @@ function RecordDialog({ type, data, onClose, onSave, record }) {
           type: "number",
           min: 0,
         },
+        { name: "batchCode", label: "Batch / lot number", required: false },
+        { name: "expiryDate", label: "Expiry date", type: "date", required: false },
         { name: "note", label: "Note", type: "textarea", required: false },
+      ],
+    },
+    minibar: {
+      title: `Record minibar · ${record?.name || "Item"}`,
+      fields: [
+        {
+          name: "unitId",
+          label: "Room",
+          type: "select",
+          options: data.units.filter((unit) => unit.databaseRoom).map((unit) => ({ value: unit.id, label: unit.number })),
+        },
+        {
+          name: "bookingId",
+          label: "Active stay (optional)",
+          type: "select",
+          required: false,
+          options: [{ value: "", label: "No room charge" }, ...data.bookings.filter((booking) => booking.databaseBooking && booking.status === "checked_in").map((booking) => ({ value: booking.id, label: `${unitFor(data, booking.unitId)?.number || "Room"} · ${guestFor(data, booking.guestId)?.name || "Guest"}` }))],
+        },
+        { name: "quantity", label: `Quantity (${record?.unit || "units"})`, type: "number", min: 0.01, step: 0.01 },
+        { name: "unitPriceNaira", label: "Charge per unit (₦)", type: "number", min: 0, required: false },
+        { name: "reason", label: "Note", required: false },
       ],
     },
     purchase: {
@@ -895,6 +1083,7 @@ function RecordDialog({ type, data, onClose, onSave, record }) {
         },
         { name: "quantity", label: "Quantity", type: "number", min: 1 },
         { name: "costNaira", label: "Unit cost (₦)", type: "number", min: 0 },
+        { name: "expiryDate", label: "Expiry date for received stock", type: "date", required: false },
       ],
     },
     expense: {
@@ -1015,6 +1204,7 @@ function RecordDialog({ type, data, onClose, onSave, record }) {
       fields: [
         { name: "name", label: "Full name" },
         { name: "email", label: "Email", type: "email" },
+        { name: "password", label: "Temporary password", type: "password", hint: "Use at least 12 characters." },
         {
           name: "role",
           label: "Role",
@@ -1026,6 +1216,10 @@ function RecordDialog({ type, data, onClose, onSave, record }) {
           ],
         },
       ],
+    },
+    setPassword: {
+      title: `Set password · ${record?.name || "Team member"}`,
+      fields: [{ name: "password", label: "New password", type: "password", hint: "Use at least 12 characters." }],
     },
     cancel: {
       title: "Cancel reservation",
@@ -1157,17 +1351,22 @@ function Dashboard({
   onNavigate,
   onCreate,
   onBookingAction,
+  housekeepingPrepAlerts,
+  checkoutFollowUps,
 }) {
+  const inventoryUnits = data.units.some((unit) => unit.databaseRoom)
+    ? data.units.filter((unit) => unit.databaseRoom)
+    : data.units;
   const arrivals = data.bookings.filter(
     (booking) => booking.checkIn === TODAY && booking.status === "confirmed",
   ).length;
   const departures = data.bookings.filter(
     (booking) => booking.checkOut === TODAY && booking.status === "checked_in",
   ).length;
-  const occupied = data.units.filter(
+  const occupied = inventoryUnits.filter(
     (unit) => unit.status === "occupied",
   ).length;
-  const availableForOccupancy = data.units.filter(
+  const availableForOccupancy = inventoryUnits.filter(
     (unit) => unit.status !== "out_of_order",
   ).length;
   const occupancy = availableForOccupancy
@@ -1182,6 +1381,14 @@ function Dashboard({
   const recent = [...data.bookings]
     .sort((a, b) => b.id.localeCompare(a.id))
     .slice(0, 6);
+  const lowStockItems = data.inventory.filter((item) => item.databaseItem && item.quantity <= item.minimum);
+  const deskSummary = buildDeskWorkerDashboardSummary({
+    bookings: data.bookings,
+    guests: data.guests,
+    units: inventoryUnits,
+    inventory: data.inventory,
+    settings: data.settings,
+  }, TODAY, (typeof lagosClock !== "undefined" ? lagosClock.time : "12:00"));
   const barValues = [42, 67, 52, 84, 58, 91, 73];
   return (
     <>
@@ -1203,7 +1410,14 @@ function Dashboard({
         }
       />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {role !== "worker" && (
+        {role === "worker" ? (
+          <StatCard
+            label="Rooms booked"
+            value={deskSummary.roomsBooked}
+            note="Active room reservations"
+            icon={BedDouble}
+          />
+        ) : (
           <StatCard
             label="Revenue received"
             value={formatMoney(revenue)}
@@ -1231,6 +1445,226 @@ function Dashboard({
           icon={CalendarDays}
         />
       </div>
+      {housekeepingPrepAlerts.length > 0 && (
+        <Panel className="mt-4 border-[#d7e3d9] bg-[#f5f8f4] p-4 sm:p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold text-[#283b30]">Prepare housekeeping for check-outs</h2>
+              <p className="mt-1 text-xs text-[#66776c]">Call housekeeping before noon so rooms can be cleaned after guests leave.</p>
+            </div>
+            <Button variant="secondary" onClick={() => onNavigate("housekeeping")}>
+              <ClipboardList size={16} />Housekeeping board
+            </Button>
+          </div>
+          <div className="divide-y divide-[#dce6dd]">
+            {housekeepingPrepAlerts.map((booking) => {
+              const guest = guestFor(data, booking.guestId);
+              const unit = unitFor(data, booking.unitId);
+              return (
+                <div key={booking.id} className="py-2.5 first:pt-0 last:pb-0">
+                  <p className="text-sm font-medium text-[#2e3e34]">Room {unit?.number || "—"} · {guest?.name || "Guest"}</p>
+                  <p className="mt-0.5 text-xs text-[#66776c]">Due out by {data.settings.checkOutTime}. Call housekeeping to tidy the room after checkout.</p>
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      )}
+      {role === "worker" && checkoutFollowUps.length > 0 && (
+        <Panel className="mt-4 border-amber-300 bg-amber-50/70 p-4 sm:p-5">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold text-[#503915]">Checkout follow-up needed</h2>
+              <p className="mt-1 text-xs text-[#795e2b]">Guests due out by {data.settings.checkOutTime} who are still checked in.</p>
+            </div>
+            <span className="grid size-8 place-items-center rounded-full bg-white text-sm font-semibold text-[#795e2b]">{checkoutFollowUps.length}</span>
+          </div>
+          <div className="divide-y divide-amber-200">
+            {checkoutFollowUps.map((booking) => {
+              const guest = guestFor(data, booking.guestId);
+              const unit = unitFor(data, booking.unitId);
+              return (
+                <div key={booking.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-1 last:pb-0">
+                  <div>
+                    <p className="text-sm font-medium text-[#3c3322]">{guest?.name || "Guest"} · Room {unit?.number || "—"}</p>
+                    <p className="mt-0.5 text-xs text-[#795e2b]">Ask whether they’re extending or checking out.</p>
+                  </div>
+                  {guest?.phone ? (
+                    <a href={`tel:${guest.phone.replace(/[^+\d]/g, "")}`} className="inline-flex min-h-9 items-center gap-2 rounded-lg bg-[#7b5720] px-3 text-sm font-medium text-white hover:bg-[#644619]">
+                      <PhoneCall size={15} />Call guest
+                    </a>
+                  ) : <span className="text-xs text-[#795e2b]">No phone number on file</span>}
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      )}
+      {lowStockItems.length > 0 && (
+        <Panel className="mt-4 border-rose-300 bg-rose-50 p-4 sm:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <CircleAlert className="mt-0.5 shrink-0 text-rose-700" size={19} />
+              <div>
+                <h2 className="font-semibold text-rose-900">Low stock · restock needed</h2>
+                <p className="mt-1 text-xs text-rose-800">{lowStockItems.length} item{lowStockItems.length === 1 ? "" : "s"} at or below minimum. Contact the supplier or request a purchase.</p>
+              </div>
+            </div>
+            <Button variant="danger" className="min-h-9" onClick={() => onNavigate("purchasing")}><ShoppingCart size={15} />Request restock</Button>
+          </div>
+          <div className="mt-3 divide-y divide-rose-200">
+            {lowStockItems.slice(0, 5).map((item) => {
+              const supplier = data.suppliers.find((entry) => entry.id === item.supplierId);
+              return <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0">
+                <p className="text-sm font-medium text-rose-950">{item.name} · {item.quantity} {item.unit} left <span className="font-normal text-rose-800">(minimum {item.minimum})</span></p>
+                {supplier?.phone ? <a href={`tel:${supplier.phone.replace(/[^+\d]/g, "")}`} className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-900 underline"><PhoneCall size={13} />Call {supplier.name}</a> : <span className="text-xs text-rose-800">Supplier contact not recorded</span>}
+              </div>;
+            })}
+          </div>
+        </Panel>
+      )}
+      {role === "worker" && (
+        <div className="mt-4 grid gap-4 xl:grid-cols-[1.7fr_0.9fr]">
+          <Panel className="p-4 sm:p-5">
+            <div className="mb-5 flex items-center justify-between gap-4">
+              <div>
+                <h2 className="font-semibold text-[#25332b]">Desk worker dashboard</h2>
+                <p className="mt-1 text-xs text-[#7a8880]">
+                  Today’s front desk queue and room readiness
+                </p>
+              </div>
+              <Button variant="secondary" onClick={() => onNavigate("bookings")}>
+                <CalendarDays size={16} />
+                Open bookings
+              </Button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <StatCard
+                label="Arrivals"
+                value={deskSummary.arrivalsToday}
+                note="Confirmed check-ins"
+                icon={ArrowRight}
+              />
+              <StatCard
+                label="Departures"
+                value={deskSummary.departuresToday}
+                note="Guests checking out"
+                icon={CalendarDays}
+              />
+              <StatCard
+                label="Ready rooms"
+                value={deskSummary.readyRooms}
+                note="Available or inspected"
+                icon={BedDouble}
+              />
+              <StatCard
+                label="Priority actions"
+                value={deskSummary.priorityActions}
+                note="Follow-ups today"
+                icon={Bell}
+              />
+            </div>
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl border border-[#e7eee8] bg-[#f9fbf9] p-3.5">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="font-semibold text-[#294038]">Arrivals due</h3>
+                  <span className="text-xs text-[#718078]">{deskSummary.arrivalsToday} guests</span>
+                </div>
+                {deskSummary.arrivalQueue.length ? (
+                  <div className="space-y-2.5">
+                    {deskSummary.arrivalQueue.slice(0, 4).map((guest) => (
+                      <div key={guest.id} className="flex items-center justify-between gap-3 rounded-lg bg-white px-2.5 py-2">
+                        <div>
+                          <p className="text-sm font-medium text-[#2c3b34]">{guest.guestName}</p>
+                          <p className="text-xs text-[#718078]">Room {guest.roomNumber}</p>
+                        </div>
+                        <Button
+                          variant="secondary"
+                          className="min-h-8 px-2.5 text-xs"
+                          onClick={() => {
+                            const booking = data.bookings.find((item) => item.id === guest.id);
+                            if (booking) onBookingAction(booking, "checkin");
+                          }}
+                        >
+                          Check in
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyPanel
+                    icon={CalendarDays}
+                    title="No arrivals"
+                    detail="Confirmed arrivals will appear here."
+                  />
+                )}
+              </div>
+              <div className="rounded-xl border border-[#e7eee8] bg-[#f9fbf9] p-3.5">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="font-semibold text-[#294038]">Check-outs due</h3>
+                  <span className="text-xs text-[#718078]">{deskSummary.departuresToday} rooms</span>
+                </div>
+                {deskSummary.departureQueue.length ? (
+                  <div className="space-y-2.5">
+                    {deskSummary.departureQueue.slice(0, 4).map((guest) => (
+                      <div key={guest.id} className="flex items-center justify-between gap-3 rounded-lg bg-white px-2.5 py-2">
+                        <div>
+                          <p className="text-sm font-medium text-[#2c3b34]">{guest.guestName}</p>
+                          <p className="text-xs text-[#718078]">Room {guest.roomNumber}</p>
+                        </div>
+                        <span className={`rounded-full px-2 py-1 text-[10px] font-medium ${guest.isLate ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"}`}>
+                          {guest.isLate ? "Follow up" : "On track"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyPanel
+                    icon={Bell}
+                    title="No departures"
+                    detail="Checkout follow-ups will appear here."
+                  />
+                )}
+              </div>
+            </div>
+          </Panel>
+          <Panel className="p-4 sm:p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="font-semibold text-[#25332b]">Quick actions</h2>
+                <p className="mt-1 text-xs text-[#7a8880]">Keep the desk moving</p>
+              </div>
+              <span className="grid size-8 place-items-center rounded-full bg-[#edf6f0] text-[#176b54]">
+                <Check size={16} />
+              </span>
+            </div>
+            <div className="space-y-2.5">
+              <Button variant="secondary" className="w-full justify-between" onClick={() => onNavigate("bookings")}>
+                <span>Reservations</span>
+                <ArrowRight size={15} />
+              </Button>
+              <Button variant="secondary" className="w-full justify-between" onClick={() => onNavigate("housekeeping")}>
+                <span>Housekeeping board</span>
+                <ClipboardList size={15} />
+              </Button>
+              <Button variant="secondary" className="w-full justify-between" onClick={() => onNavigate("rooms")}>
+                <span>Room status</span>
+                <BedDouble size={15} />
+              </Button>
+              <Button variant="secondary" className="w-full justify-between" onClick={() => onNavigate("inventory")}>
+                <span>Restock checks</span>
+                <Package size={15} />
+              </Button>
+            </div>
+            {deskSummary.lowStockItems > 0 && (
+              <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-rose-700">Low stock alert</p>
+                <p className="mt-2 text-sm font-medium text-rose-900">{deskSummary.lowStockItems} item{deskSummary.lowStockItems === 1 ? "" : "s"} need restocking.</p>
+              </div>
+            )}
+          </Panel>
+        </div>
+      )}
       <div className="mt-4 grid gap-4 xl:grid-cols-[1.55fr_1fr]">
         <Panel className="p-4 sm:p-5">
           <div className="mb-5 flex items-center justify-between gap-4">
@@ -1308,7 +1742,7 @@ function Dashboard({
               <span>Available / inspected</span>
               <b className="font-medium text-[#26342d]">
                 {
-                  data.units.filter((unit) =>
+                  inventoryUnits.filter((unit) =>
                     ["available", "inspected"].includes(unit.status),
                   ).length
                 }{" "}
@@ -1319,7 +1753,7 @@ function Dashboard({
               <span>Out of order</span>
               <b className="font-medium text-[#26342d]">
                 {
-                  data.units.filter((unit) => unit.status === "out_of_order")
+                  inventoryUnits.filter((unit) => unit.status === "out_of_order")
                     .length
                 }{" "}
                 unit
@@ -1705,38 +2139,42 @@ function GuestsPage({ data, search, onSearch, onCreate }) {
 }
 
 function RoomsPage({
-  data,
+  rooms,
   search,
   onSearch,
   role,
   onCreate,
+  onEditRoom,
   onBlock,
   onUnitStatus,
+  loading,
+  error,
 }) {
-  const rows = data.units.filter((unit) =>
-    `${unit.number} ${roomTypeFor(data, unit.roomTypeId)?.name} ${unit.status}`
+  const rows = rooms.filter((room) =>
+    `${room.name} ${room.number} ${room.roomTypeName} ${room.status}`
       .toLowerCase()
       .includes(search.toLowerCase()),
   );
   const counts = ["available", "occupied", "dirty", "out_of_order"].map(
-    (status) => [
-      status,
-      data.units.filter((unit) => unit.status === status).length,
-    ],
+    (status) => [status, rooms.filter((room) => room.status === status).length],
   );
   return (
     <>
       <PageHeader
         title="Rooms & units"
-        description="Manage room inventory, occupancy, and maintenance blocks."
+        description="Thirteen named rooms, managed from the hotel database."
         action={
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => onCreate("rateRule")} disabled={!allowed(role, "inspect")}><SlidersHorizontal size={16} />Rates</Button>
-            <Button variant="secondary" onClick={() => onCreate("roomType")} disabled={!allowed(role, "inspect")}><Plus size={16} />Room type</Button>
-            <Button onClick={() => onCreate("unit")} disabled={!allowed(role, "inspect")}><Plus size={16} />Add unit</Button>
-          </div>
+          <Button onClick={() => onCreate("booking")} disabled={!allowed(role, "booking")}>
+            <Plus size={16} />New reservation
+          </Button>
         }
       />
+      {error && (
+        <Panel className="mb-4 flex items-center gap-3 border-rose-200 p-4 text-sm text-rose-800">
+          <CircleAlert size={18} className="shrink-0" />
+          <span>{error}</span>
+        </Panel>
+      )}
       <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {counts.map(([status, value]) => (
           <Panel key={status} className="flex items-center justify-between p-4">
@@ -1756,86 +2194,81 @@ function RoomsPage({
         <SearchBox
           value={search}
           onChange={onSearch}
-          placeholder="Find unit or type"
+          placeholder="Find a room"
         />
       </div>
-      <Panel>
-        <DataTable
-          columns={[
-            {
-              key: "number",
-              label: "Unit",
-              render: (unit) => (
-                <span className="font-semibold">{unit.number}</span>
-              ),
-            },
-            {
-              key: "type",
-              label: "Room type",
-              render: (unit) => roomTypeFor(data, unit.roomTypeId)?.name,
-            },
-            { key: "floor", label: "Floor" },
-            {
-              key: "rate",
-              label: "Rate / night",
-              render: (unit) => formatMoney(unit.rateKobo),
-            },
-            { key: "guests", label: "Max guests" },
-            {
-              key: "status",
-              label: "Status",
-              render: (unit) => <Status value={unit.status} />,
-            },
-            {
-              key: "action",
-              label: "Action",
-              render: (unit) =>
-                unit.status === "out_of_order" ? (
-                  allowed(role, "inspect") ? (
-                    <Button
-                      variant="secondary"
-                      className="min-h-8 px-2.5 text-xs"
-                      onClick={() => onUnitStatus(unit, "available")}
-                    >
+      {loading ? (
+        <p className="py-12 text-center text-sm text-[#718078]">Loading rooms…</p>
+      ) : rows.length ? (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {rows.map((room) => (
+            <Panel key={room.id} className="overflow-hidden rounded-lg">
+              <div className="relative aspect-[16/10] bg-[#e8eee9]">
+                {room.images?.[0] && (
+                  <img
+                    src={room.images[0]}
+                    alt={`${room.name} room`}
+                    className="h-full w-full object-cover"
+                    loading="lazy"
+                  />
+                )}
+                <div className="absolute left-3 top-3"><Status value={room.status} /></div>
+                {role === "ceo" && (
+                  <Button
+                    variant="secondary"
+                    className="absolute right-3 top-3 min-h-9 bg-white/95 px-3"
+                    onClick={() => onEditRoom(room)}
+                    title={`Edit ${room.name}`}
+                  >
+                    <ImagePlus size={16} />Edit room
+                  </Button>
+                )}
+              </div>
+              <div className="space-y-4 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold text-[#27362e]">{room.name}</h2>
+                    <p className="mt-0.5 text-xs text-[#77857d]">Room {room.number}</p>
+                  </div>
+                  <span className="text-right text-sm font-semibold text-[#27362e]">
+                    {room.rateKobo ? formatMoney(room.rateKobo) : "Rate not set"}
+                    {room.rateKobo && <span className="block text-xs font-normal text-[#77857d]">per night</span>}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-3 border-t border-[#e8eeea] pt-3 text-sm">
+                  <div>
+                    <p className="text-xs text-[#77857d]">Bed size</p>
+                    <p className="mt-1 font-medium text-[#34443a]">{room.bedType || "Same size, not specified"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-[#77857d]">Maximum guests</p>
+                    <p className="mt-1 font-medium text-[#34443a]">{room.maxGuests}</p>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between border-t border-[#e8eeea] pt-3 text-xs text-[#718078]">
+                  <span>{room.activeReservations ? `${room.activeReservations} active reservation${room.activeReservations === 1 ? "" : "s"}` : "No current reservations"}</span>
+                  {room.sizeM2 ? <span>{room.sizeM2} m²</span> : <span>Size not set</span>}
+                </div>
+                {allowed(role, "inspect") && (room.status === "out_of_order" ? (
+                  <div className="flex justify-end border-t border-[#e8eeea] pt-3">
+                    <Button variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => onUnitStatus(room, "available")}>
                       Return to service
                     </Button>
-                  ) : (
-                    <span className="text-xs text-[#87938b]">Manager only</span>
-                  )
-                ) : ["available", "inspected"].includes(unit.status) ? (
-                  allowed(role, "inspect") ? (
-                    <Button
-                      variant="secondary"
-                      className="min-h-8 px-2.5 text-xs"
-                      onClick={() => onBlock(unit)}
-                    >
+                  </div>
+                ) : ["available", "inspected"].includes(room.status) ? (
+                  <div className="flex justify-end border-t border-[#e8eeea] pt-3">
+                    <Button variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => onBlock(room)}>
                       Block dates
                     </Button>
-                  ) : (
-                    <span className="text-xs text-[#87938b]">—</span>
-                  )
-                ) : (
-                  <span className="text-xs text-[#87938b]">—</span>
-                ),
-            },
-          ]}
-          rows={rows}
-        />
-      </Panel>
-      <Panel className="mt-4 p-4 text-sm text-[#68766e]">
-        <div className="flex gap-3">
-          <CircleAlert size={18} className="shrink-0 text-amber-600" />
-          <p>
-            Availability is checked against active reservations and demo
-            maintenance blocks. The production API must also enforce date
-            overlap inside a database transaction.
-          </p>
+                  </div>
+                ) : null)}
+              </div>
+            </Panel>
+          ))}
         </div>
-      </Panel>
-      <Panel className="mt-4">
-        <div className="px-4 py-4 sm:px-5"><h2 className="font-semibold text-[#28362e]">Seasonal & long-stay rates</h2><p className="mt-1 text-xs text-[#78867e]">The most specific date rule applies; min-night rules support weekly and monthly stays.</p></div>
-        {data.rateRules?.length ? <DataTable columns={[{ key: "room", label: "Room type", render: (rule) => roomTypeFor(data, rule.roomTypeId)?.name }, { key: "dates", label: "Dates", render: (rule) => `${formatDate(rule.startDate)} – ${formatDate(rule.endDate)}` }, { key: "minimum", label: "Minimum stay", render: (rule) => rule.minNights ? `${rule.minNights} nights` : "Any" }, { key: "rate", label: "Rate / night", render: (rule) => formatMoney(rule.rateKobo) }]} rows={data.rateRules} /> : <EmptyPanel icon={SlidersHorizontal} title="No rate rules yet" detail="Base room rates are used until a seasonal or long-stay rate is added." />}
-      </Panel>
+      ) : (
+        <EmptyPanel icon={BedDouble} title="No rooms found" detail="Adjust the search or check the database connection." />
+      )}
     </>
   );
 }
@@ -2049,7 +2482,181 @@ function HousekeepingPage({ data, role, currentUserName, onCreate, onTaskAction 
   );
 }
 
-function InventoryPage({ data, role, search, onSearch, onCreate, onStock }) {
+function MenuItemDialog({ data, onClose, onSave }) {
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState("");
+  const [description, setDescription] = useState("");
+  const [station, setStation] = useState("kitchen");
+  const [priceNaira, setPriceNaira] = useState("");
+  const [recipe, setRecipe] = useState([{ inventoryItemId: data.inventory[0]?.id || "", quantity: "1" }]);
+  const [modifiers, setModifiers] = useState([]);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event) {
+    event.preventDefault();
+    if (!name.trim() || !category.trim() || !priceNaira || recipe.some((line) => !line.inventoryItemId || Number(line.quantity) <= 0)) {
+      setError("Enter the menu details and at least one valid recipe ingredient.");
+      return;
+    }
+    setSaving(true);
+    const result = await onSave({
+      name: name.trim(),
+      category: category.trim(),
+      description,
+      station,
+      priceKobo: Math.round(Number(priceNaira) * 100),
+      recipe: recipe.map((line) => ({ inventoryItemId: line.inventoryItemId, quantity: Number(line.quantity) })),
+      modifiers: modifiers.filter((modifier) => modifier.name.trim()).map((modifier) => ({
+        name: modifier.name.trim(),
+        priceDeltaKobo: Math.round(Number(modifier.priceNaira || 0) * 100),
+        recipe: modifier.inventoryItemId && Number(modifier.quantity) > 0
+          ? [{ inventoryItemId: modifier.inventoryItemId, quantity: Number(modifier.quantity) }]
+          : [],
+      })),
+    });
+    setSaving(false);
+    if (result?.error) setError(result.error);
+    else onClose();
+  }
+
+  return (
+    <ModalFrame title="Add menu item" description="Choose ingredients so accepting an order deducts stock." onClose={onClose}>
+      <form onSubmit={submit} className="space-y-5 p-5 sm:p-6">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <InputField field={{ name: "name", label: "Menu item" }} value={name} onChange={(event) => setName(event.target.value)} />
+          <InputField field={{ name: "category", label: "Category", placeholder: "Breakfast, drinks…" }} value={category} onChange={(event) => setCategory(event.target.value)} />
+          <InputField field={{ name: "station", label: "Station", type: "select", options: ["kitchen", "bar"].map((value) => ({ value, label: value === "kitchen" ? "Kitchen" : "Bar" })) }} value={station} onChange={(event) => setStation(event.target.value)} />
+          <InputField field={{ name: "price", label: "Price (₦)", type: "number", min: 0 }} value={priceNaira} onChange={(event) => setPriceNaira(event.target.value)} />
+          <div className="sm:col-span-2"><InputField field={{ name: "description", label: "Description", type: "textarea", required: false }} value={description} onChange={(event) => setDescription(event.target.value)} /></div>
+        </div>
+        <div className="space-y-3 border-t border-[#e8eeea] pt-4">
+          <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">Recipe</h3><Button type="button" variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => setRecipe((lines) => [...lines, { inventoryItemId: data.inventory[0]?.id || "", quantity: "1" }])}><Plus size={14} />Ingredient</Button></div>
+          {recipe.map((line, index) => (
+            <div key={index} className="grid grid-cols-[1fr_100px_auto] items-end gap-2">
+              <InputField field={{ name: `ingredient-${index}`, label: index === 0 ? "Inventory item" : `Ingredient ${index + 1}`, type: "select", options: data.inventory.map((item) => ({ value: item.id, label: `${item.name} · ${item.unit}` })) }} value={line.inventoryItemId} onChange={(event) => setRecipe((lines) => lines.map((item, row) => row === index ? { ...item, inventoryItemId: event.target.value } : item))} />
+              <InputField field={{ name: `quantity-${index}`, label: "Qty", type: "number", min: 0.01, step: 0.01 }} value={line.quantity} onChange={(event) => setRecipe((lines) => lines.map((item, row) => row === index ? { ...item, quantity: event.target.value } : item))} />
+              {recipe.length > 1 && <Button type="button" variant="quiet" className="min-h-10 px-2" aria-label="Remove ingredient" onClick={() => setRecipe((lines) => lines.filter((_, row) => row !== index))}><X size={16} /></Button>}
+            </div>
+          ))}
+        </div>
+        <div className="space-y-3 border-t border-[#e8eeea] pt-4">
+          <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">Modifiers</h3><Button type="button" variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => setModifiers((items) => [...items, { name: "", priceNaira: "0", inventoryItemId: "", quantity: "1" }])}><Plus size={14} />Modifier</Button></div>
+          {modifiers.map((modifier, index) => (
+            <div key={index} className="grid gap-2 rounded-lg border border-[#e8eeea] p-3 sm:grid-cols-2">
+              <InputField field={{ name: `modifier-${index}`, label: "Name" }} value={modifier.name} onChange={(event) => setModifiers((items) => items.map((item, row) => row === index ? { ...item, name: event.target.value } : item))} />
+              <InputField field={{ name: `modifier-price-${index}`, label: "Extra price (₦)", type: "number", min: 0 }} value={modifier.priceNaira} onChange={(event) => setModifiers((items) => items.map((item, row) => row === index ? { ...item, priceNaira: event.target.value } : item))} />
+              <InputField field={{ name: `modifier-stock-${index}`, label: "Extra ingredient (optional)", type: "select", required: false, options: [{ value: "", label: "No extra ingredient" }, ...data.inventory.map((item) => ({ value: item.id, label: `${item.name} · ${item.unit}` }))] }} value={modifier.inventoryItemId} onChange={(event) => setModifiers((items) => items.map((item, row) => row === index ? { ...item, inventoryItemId: event.target.value } : item))} />
+              <div className="flex items-end gap-2"><InputField field={{ name: `modifier-qty-${index}`, label: "Extra qty", type: "number", min: 0.01, step: 0.01, required: false }} value={modifier.quantity} onChange={(event) => setModifiers((items) => items.map((item, row) => row === index ? { ...item, quantity: event.target.value } : item))} /><Button type="button" variant="quiet" className="min-h-10 px-2" aria-label="Remove modifier" onClick={() => setModifiers((items) => items.filter((_, row) => row !== index))}><X size={16} /></Button></div>
+            </div>
+          ))}
+        </div>
+        {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={saving || !data.inventory.length}>{saving ? "Saving…" : "Save menu item"}</Button></div>
+      </form>
+    </ModalFrame>
+  );
+}
+
+function FnbOrderDialog({ data, fnbData, onClose, onSave }) {
+  const checkedInBookings = data.bookings.filter((booking) => booking.databaseBooking && booking.status === "checked_in");
+  const [paymentMethod, setPaymentMethod] = useState(checkedInBookings.length ? "room_charge" : "cash");
+  const [bookingId, setBookingId] = useState(checkedInBookings[0]?.id || "");
+  const [source, setSource] = useState(checkedInBookings.length ? "room_service" : "counter");
+  const [cart, setCart] = useState([]);
+  const [notes, setNotes] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const menu = fnbData.menuItems.filter((item) => item.available);
+  const subtotal = cart.reduce((sum, line) => {
+    const menuItem = menu.find((item) => item.id === line.menuItemId);
+    const modifierTotal = (line.modifierIds || []).reduce((total, id) => total + (menuItem?.modifiers.find((modifier) => modifier.id === id)?.priceDeltaKobo || 0), 0);
+    return sum + ((menuItem?.priceKobo || 0) + modifierTotal) * line.quantity;
+  }, 0);
+  function addItem(menuItem) {
+    setCart((lines) => {
+      const existing = lines.find((line) => line.menuItemId === menuItem.id && !line.modifierIds?.length);
+      return existing
+        ? lines.map((line) => line === existing ? { ...line, quantity: line.quantity + 1 } : line)
+        : [...lines, { menuItemId: menuItem.id, quantity: 1, modifierIds: [] }];
+    });
+  }
+  async function submit(event) {
+    event.preventDefault();
+    if (!cart.length || (paymentMethod === "room_charge" && !bookingId)) {
+      setError("Add menu items and choose an active booking for room charges.");
+      return;
+    }
+    setSaving(true);
+    const booking = checkedInBookings.find((item) => item.id === bookingId);
+    const result = await onSave({
+      items: cart,
+      source,
+      paymentMethod,
+      unitId: booking ? unitFor(data, booking.unitId)?.id : "",
+      bookingId: paymentMethod === "room_charge" ? bookingId : "",
+      guestName: booking ? guestFor(data, booking.guestId)?.name : "",
+      notes,
+    });
+    setSaving(false);
+    if (result?.error) setError(result.error);
+    else onClose();
+  }
+  return (
+    <ModalFrame title="New food & drink order" description="Stock is deducted when the kitchen/bar accepts the order." onClose={onClose}>
+      <form onSubmit={submit} className="space-y-5 p-5 sm:p-6">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <InputField field={{ name: "source", label: "Order source", type: "select", options: ["room_service", "restaurant", "bar", "counter", "poolside"].map((value) => ({ value, label: value.replaceAll("_", " ") })) }} value={source} onChange={(event) => setSource(event.target.value)} />
+          <InputField field={{ name: "paymentMethod", label: "Payment", type: "select", options: ["room_charge", "cash", "card", "transfer"].map((value) => ({ value, label: value.replaceAll("_", " ") })) }} value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} />
+          {paymentMethod === "room_charge" && <div className="sm:col-span-2"><InputField field={{ name: "bookingId", label: "Checked-in booking", type: "select", options: checkedInBookings.map((booking) => ({ value: booking.id, label: `${unitFor(data, booking.unitId)?.number} · ${guestFor(data, booking.guestId)?.name} · ${booking.id}` })) }} value={bookingId} onChange={(event) => setBookingId(event.target.value)} /></div>}
+        </div>
+        <div className="grid max-h-48 gap-2 overflow-y-auto sm:grid-cols-2">
+          {menu.map((item) => <button key={item.id} type="button" onClick={() => addItem(item)} className="flex min-h-12 items-center justify-between gap-2 rounded-lg border border-[#e1e9e3] px-3 py-2 text-left hover:bg-[#f4f7f4]"><span><span className="block text-sm font-medium">{item.name}</span><span className="text-xs text-[#77857d]">{item.category} · {item.station}</span></span><span className="text-sm font-semibold">{formatMoney(item.priceKobo)}</span></button>)}
+          {!menu.length && <p className="text-sm text-[#718078]">No menu items are available yet.</p>}
+        </div>
+        <div className="space-y-2 border-t border-[#e8eeea] pt-3">
+          <h3 className="text-sm font-semibold">Order</h3>
+          {cart.map((line) => {
+            const item = menu.find((entry) => entry.id === line.menuItemId);
+            return <div key={line.menuItemId} className="space-y-2 rounded-lg bg-[#f7f9f7] p-3"><div className="flex items-center gap-3"><span className="min-w-0 flex-1 text-sm font-medium">{item?.name}</span><input aria-label={`${item?.name} quantity`} type="number" min="1" value={line.quantity} onChange={(event) => setCart((items) => items.map((row) => row.menuItemId === line.menuItemId ? { ...row, quantity: Math.max(1, Number(event.target.value)) } : row))} className="w-16 rounded-md border border-[#dfe7e1] px-2 py-1" /><button type="button" aria-label={`Remove ${item?.name}`} onClick={() => setCart((items) => items.filter((row) => row.menuItemId !== line.menuItemId))}><X size={16} /></button></div>{item?.modifiers.map((modifier) => <label key={modifier.id} className="flex items-center gap-2 text-xs text-[#58685e]"><input type="checkbox" checked={line.modifierIds.includes(modifier.id)} onChange={(event) => setCart((items) => items.map((row) => row.menuItemId === line.menuItemId ? { ...row, modifierIds: event.target.checked ? [...row.modifierIds, modifier.id] : row.modifierIds.filter((id) => id !== modifier.id) } : row))} />{modifier.name}{modifier.priceDeltaKobo ? ` (+${formatMoney(modifier.priceDeltaKobo)})` : ""}</label>)}</div>;
+          })}
+          <div className="flex justify-between text-sm font-semibold"><span>Subtotal + VAT + service</span><span>{formatMoney(Math.round(subtotal * 1.125))}</span></div>
+        </div>
+        <InputField field={{ name: "notes", label: "Order notes / allergies", type: "textarea", required: false }} value={notes} onChange={(event) => setNotes(event.target.value)} />
+        {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={saving || !menu.length}>{saving ? "Placing…" : "Place order"}</Button></div>
+      </form>
+    </ModalFrame>
+  );
+}
+
+function FnbRefundDialog({ order, onClose, onSave }) {
+  const [amountNaira, setAmountNaira] = useState((order.totalKobo / 100).toFixed(2));
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState("");
+  async function submit(event) {
+    event.preventDefault();
+    const result = await onSave(order, { amountKobo: Math.round(Number(amountNaira) * 100), reason });
+    if (result?.error) setError(result.error);
+    else onClose();
+  }
+  return <ModalFrame title={`Refund ${order.orderNumber}`} description="Refunds are recorded against the original order." onClose={onClose}><form onSubmit={submit} className="space-y-4 p-5"><InputField field={{ name: "amount", label: "Refund amount (₦)", type: "number", min: 0.01 }} value={amountNaira} onChange={(event) => setAmountNaira(event.target.value)} /><InputField field={{ name: "reason", label: "Reason", type: "textarea" }} value={reason} onChange={(event) => setReason(event.target.value)} />{error && <p role="alert" className="text-sm text-rose-700">{error}</p>}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit">Record refund</Button></div></form></ModalFrame>;
+}
+
+function RestaurantPage({ data, fnbData, role, loading, onAddMenu, onNewOrder, onStatus, onAvailability, onRefund }) {
+  const [station, setStation] = useState("all");
+  const queue = fnbData.orders.filter((order) => ["new", "accepted", "preparing", "ready", "served"].includes(order.status) && (station === "all" || order.items.some((item) => item.station === station)));
+  const categories = [...new Set(fnbData.menuItems.map((item) => item.category))];
+  return <>
+    <PageHeader title="Food & drink" description="Menu, kitchen/bar queue, room charges, and counter orders." action={<div className="flex gap-2">{role !== "worker" && <Button variant="secondary" onClick={onAddMenu}><Plus size={16} />Menu item</Button>}<Button onClick={onNewOrder}><Plus size={16} />New order</Button></div>} />
+    <div className="grid gap-4 xl:grid-cols-[1fr_1.2fr]">
+      <Panel><div className="border-b border-[#e8eeea] px-4 py-4"><h2 className="font-semibold">Menu</h2><p className="mt-1 text-xs text-[#77857d]">Recipes use tracked inventory; unavailable items cannot be ordered.</p></div>{loading ? <p className="p-5 text-sm">Loading menu…</p> : fnbData.menuItems.length ? <div className="divide-y divide-[#edf1ee]">{categories.map((category) => <div key={category}><h3 className="bg-[#f7f9f7] px-4 py-2 text-xs font-semibold uppercase text-[#718078]">{category}</h3>{fnbData.menuItems.filter((item) => item.category === category).map((item) => <div key={item.id} className="flex items-center gap-3 px-4 py-3"><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{item.name}</p><p className="mt-0.5 text-xs text-[#77857d]">{item.station} · {item.recipe.map((line) => `${line.name} ${line.quantity}${line.unit}`).join(", ")}</p></div><span className="text-sm font-semibold">{formatMoney(item.priceKobo)}</span>{role !== "worker" && <button onClick={() => onAvailability(item, !item.available)} className={`rounded-full px-2.5 py-1 text-xs ${item.available ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>{item.available ? "Available" : "Unavailable"}</button>}</div>)}</div>)}</div> : <EmptyPanel icon={Utensils} title="Menu is empty" detail="Add menu items with recipe ingredients to start taking orders." />}</Panel>
+      <Panel><div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e8eeea] px-4 py-4"><div><h2 className="font-semibold">Kitchen & bar queue</h2><p className="mt-1 text-xs text-[#77857d]">Accepting an order deducts ingredients once.</p></div><div className="flex gap-1 rounded-lg bg-[#edf2ee] p-1">{["all", "kitchen", "bar"].map((value) => <button key={value} onClick={() => setStation(value)} className={`rounded-md px-3 py-1.5 text-xs capitalize ${station === value ? "bg-white font-semibold shadow-sm" : "text-[#718078]"}`}>{value}</button>)}</div></div>{queue.length ? <div className="divide-y divide-[#edf1ee]">{queue.map((order) => <div key={order.id} className="space-y-3 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><strong className="text-sm">{order.orderNumber}</strong><Status value={order.status} /></div><p className="mt-1 text-xs text-[#718078]">{order.source.replaceAll("_", " ")} · {order.unitId ? `Room ${unitFor(data, order.unitId)?.number || "—"}` : "Counter"} · {new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p></div><strong className="text-sm">{formatMoney(order.totalKobo)}</strong></div><div className="space-y-1">{order.items.filter((item) => station === "all" || item.station === station).map((item) => <p key={item.id} className="text-sm">{item.quantity} × {item.name}{item.modifiers.length ? <span className="text-xs text-[#718078]"> · {item.modifiers.map((modifier) => modifier.name).join(", ")}</span> : null}</p>)}</div><div className="flex flex-wrap gap-2">{({ new: ["accepted"], accepted: ["preparing"], preparing: ["ready"], ready: ["served"], served: ["billed"] })[order.status]?.map((next) => <Button key={next} className="min-h-8 px-2.5 text-xs capitalize" onClick={() => onStatus(order, next)}>{next === "accepted" ? "Accept & deduct stock" : next === "billed" ? "Bill / take payment" : next}</Button>)}{order.status === "billed" && role !== "worker" && <Button variant="danger" className="min-h-8 px-2.5 text-xs" onClick={() => onRefund(order)}>Refund</Button>}{order.status !== "billed" && order.status !== "cancelled" && (order.status === "new" || role !== "worker") && <Button variant="quiet" className="min-h-8 px-2.5 text-xs" onClick={() => onStatus(order, "cancelled")}>Cancel</Button>}</div></div>)}</div> : <EmptyPanel icon={ClipboardList} title="Queue is clear" detail="New orders will appear here for the kitchen and bar." />}</Panel>
+    </div>
+  </>;
+}
+
+function InventoryPage({ data, role, search, onSearch, onCreate, onStock, batches = [], minibarMovements = [] }) {
   const rows = data.inventory.filter((item) =>
     `${item.name} ${item.category} ${item.supplierId}`
       .toLowerCase()
@@ -2062,6 +2669,9 @@ function InventoryPage({ data, role, search, onSearch, onCreate, onStock }) {
     (sum, item) => sum + item.quantity * item.costKobo,
     0,
   );
+  const thirtyDays = new Date(Date.parse(`${TODAY}T00:00:00Z`) + 30 * 86400000).toISOString().slice(0, 10);
+  const expiredBatches = batches.filter((batch) => batch.expiryDate && batch.expiryDate < TODAY && batch.remainingQuantity > 0);
+  const expiringBatches = batches.filter((batch) => batch.expiryDate && batch.expiryDate >= TODAY && batch.expiryDate <= thirtyDays && batch.remainingQuantity > 0);
   return (
     <>
       <PageHeader
@@ -2103,6 +2713,7 @@ function InventoryPage({ data, role, search, onSearch, onCreate, onStock }) {
           icon={Wallet}
         />
       </div>
+      {(low > 0 || expiredBatches.length > 0 || expiringBatches.length > 0) && <Panel className="mb-4 border-amber-200 bg-amber-50/60 p-4"><div className="flex items-start gap-3"><CircleAlert className="mt-0.5 shrink-0 text-amber-700" size={18} /><div className="min-w-0 flex-1"><h2 className="text-sm font-semibold text-[#503915]">Inventory attention</h2><div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[#795e2b]">{data.inventory.filter((item) => item.quantity <= item.minimum).map((item) => <span key={`low-${item.id}`}>Low: {item.name} ({item.quantity} {item.unit})</span>)}{expiredBatches.map((batch) => <span key={`expired-${batch.id}`}>Expired: {batch.itemName || data.inventory.find((item) => item.id === batch.itemId)?.name} · {formatDate(batch.expiryDate)}</span>)}{expiringBatches.map((batch) => <span key={`expiry-${batch.id}`}>Expiring: {batch.itemName || data.inventory.find((item) => item.id === batch.itemId)?.name} · {formatDate(batch.expiryDate)}</span>)}</div></div></div></Panel>}
       <div className="mb-4 flex justify-end">
         <SearchBox
           value={search}
@@ -2163,6 +2774,7 @@ function InventoryPage({ data, role, search, onSearch, onCreate, onStock }) {
                   <Button variant="secondary" className="min-h-8 px-2 text-xs" onClick={() => onStock("stock", item)} disabled={!allowed(role, "stock")}>Restock</Button>
                   <Button variant="quiet" className="min-h-8 px-2 text-xs" onClick={() => onStock("stockOut", item)} disabled={!allowed(role, "stock_use")}>Use</Button>
                   {allowed(role, "stock") && <Button variant="quiet" className="min-h-8 px-2 text-xs" onClick={() => onStock("stockAdjust", item)}>Count</Button>}
+                  {item.category.toLowerCase().includes("minibar") && allowed(role, "stock_use") && <Button variant="quiet" className="min-h-8 px-2 text-xs" onClick={() => onStock("minibar", item)}>Minibar</Button>}
                 </div>
               ),
             },
@@ -2170,6 +2782,8 @@ function InventoryPage({ data, role, search, onSearch, onCreate, onStock }) {
           rows={rows}
         />
       </Panel>
+      <Panel className="mt-4"><div className="px-4 py-4 sm:px-5"><h2 className="font-semibold text-[#28362e]">Expiry batches</h2><p className="mt-1 text-xs text-[#78867e]">Received food and drink lots are deducted by earliest expiry first.</p></div>{batches.length ? <DataTable columns={[{ key: "item", label: "Item", render: (batch) => batch.itemName || data.inventory.find((item) => item.id === batch.itemId)?.name }, { key: "batch", label: "Batch" }, { key: "remaining", label: "Remaining", render: (batch) => `${batch.remainingQuantity} ${batch.unit || ""}` }, { key: "expiry", label: "Expiry", render: (batch) => batch.expiryDate ? formatDate(batch.expiryDate) : "Not set" }, { key: "status", label: "Status", render: (batch) => <Status value={batch.expiryDate && batch.expiryDate < TODAY ? "expired" : batch.expiryDate && batch.expiryDate <= thirtyDays ? "pending" : "available"} /> }]} rows={batches.filter((batch) => batch.remainingQuantity > 0)} empty="No dated batches yet." /> : <EmptyPanel icon={Package} title="No dated batches" detail="Enter an expiry date when receiving perishable stock." />}</Panel>
+      <Panel className="mt-4"><div className="px-4 py-4 sm:px-5"><h2 className="font-semibold text-[#28362e]">Minibar movements</h2></div>{minibarMovements.length ? <DataTable columns={[{ key: "room", label: "Room", render: (movement) => movement.roomNumber || unitFor(data, movement.unitId)?.number }, { key: "item", label: "Item", render: (movement) => movement.itemName || data.inventory.find((item) => item.id === movement.itemId)?.name }, { key: "quantity", label: "Quantity" }, { key: "type", label: "Movement", render: (movement) => movement.movementType }, { key: "reason", label: "Note" }, { key: "date", label: "Time", render: (movement) => new Date(movement.createdAt).toLocaleString() }]} rows={minibarMovements.slice(0, 10)} /> : <EmptyPanel icon={Package} title="No minibar use recorded" detail="Record guest consumption from a room's minibar action." />}</Panel>
       <Panel className="mt-4">
         <div className="px-4 py-4 sm:px-5">
           <h2 className="font-semibold text-[#28362e]">
@@ -2483,18 +3097,41 @@ function PaymentsPage({ data, role, search, onSearch, onCreate, onIssue, onPrint
   );
 }
 
-function FinancialsPage({ data, role, onCreate, onExpenseAction }) {
-  const revenue = data.payments
-    .filter((payment) => ["paid", "refunded"].includes(payment.status))
-    .reduce((sum, payment) => sum + payment.amountKobo, 0);
-  const expenses = data.expenses
-    .filter((expense) => expense.status === "approved")
+function FinancialsPage({ data, fnbData, role, onCreate, onExpenseAction }) {
+  const transactions = [
+    ...data.payments.filter((payment) => payment.databasePayment).map((payment) => ({
+      amountKobo: payment.amountKobo,
+      method: payment.method.toLowerCase(),
+      status: payment.status,
+      date: payment.paidAt,
+    })),
+    ...(fnbData.payments || []).map((payment) => ({
+      amountKobo: payment.amountKobo,
+      method: payment.method,
+      status: payment.status,
+      date: payment.createdAt?.slice(0, 10),
+    })),
+  ].filter((payment) => payment.method !== "room_charge" && ["paid", "part_refunded", "refunded"].includes(payment.status));
+  const reportExpenses = data.expenses.filter((expense) => expense.databaseExpense);
+  const revenue = transactions.reduce((sum, payment) => sum + payment.amountKobo, 0);
+  const expenses = reportExpenses.filter((expense) => expense.status === "approved")
     .reduce((sum, expense) => sum + expense.amountKobo, 0);
-  const approvedOrders = data.purchaseOrders
-    .filter((order) => order.status === "received")
-    .reduce((sum, order) => sum + order.quantity * order.costKobo, 0);
-  const net = revenue - expenses - approvedOrders;
-  const rows = data.expenses.map((expense) => ({ ...expense, id: expense.id }));
+  const net = revenue - expenses;
+  const rows = reportExpenses;
+  const chartDates = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(`${TODAY}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() - (6 - index));
+    return date.toISOString().slice(0, 10);
+  });
+  const cashFlow = chartDates.map((date) => ({
+    date,
+    label: new Intl.DateTimeFormat("en-NG", { weekday: "short", timeZone: "UTC" }).format(new Date(`${date}T00:00:00Z`)),
+    revenue: transactions.filter((payment) => payment.date === date).reduce((sum, payment) => sum + payment.amountKobo, 0),
+    expenses: reportExpenses.filter((expense) => expense.status === "approved" && expense.date === date)
+      .reduce((sum, expense) => sum + expense.amountKobo, 0),
+  }));
+  const maxDailyAmount = Math.max(1, ...cashFlow.flatMap((day) => [day.revenue, day.expenses]));
+  const pendingExpenses = reportExpenses.filter((expense) => expense.status === "pending");
   const todayClose = data.dailyClosings?.find((closing) => closing.date === TODAY);
   return (
     <>
@@ -2507,13 +3144,13 @@ function FinancialsPage({ data, role, onCreate, onExpenseAction }) {
         <StatCard
           label="Payments received"
           value={formatMoney(revenue)}
-          note="Recorded payments"
+          note="Persisted receipts and refunds; room charges excluded"
           icon={Wallet}
         />
         <StatCard
           label="Approved expenses"
-          value={formatMoney(expenses + approvedOrders)}
-          note="Expenses and received orders"
+          value={formatMoney(expenses)}
+          note="Persisted approved expenses"
           icon={TrendingUp}
         />
         <StatCard
@@ -2535,30 +3172,24 @@ function FinancialsPage({ data, role, onCreate, onExpenseAction }) {
             <Status value="paid" />
           </div>
           <div className="mt-6 flex h-44 items-end gap-3 border-b border-[#e5ebe7]">
-            {[48, 74, 59, 88, 62, 78, 54].map((height, index) => (
+              {cashFlow.map((day) => (
               <div
-                key={index}
+                key={day.date}
                 className="flex h-full flex-1 items-end justify-center gap-1"
               >
                 <span
                   className="w-3 rounded-t bg-[#acd2b8]"
-                  style={{ height: `${height}%` }}
+                  style={{ height: `${Math.max(3, day.revenue / maxDailyAmount * 100)}%` }}
                 />
                 <span
                   className="w-3 rounded-t bg-[#eaf58a]"
-                  style={{ height: `${Math.max(14, height - 24)}%` }}
+                  style={{ height: `${Math.max(3, day.expenses / maxDailyAmount * 100)}%` }}
                 />
               </div>
             ))}
           </div>
           <div className="mt-3 flex justify-between text-[11px] text-[#7b8981]">
-            <span>Mon</span>
-            <span>Tue</span>
-            <span>Wed</span>
-            <span>Thu</span>
-            <span>Fri</span>
-            <span>Sat</span>
-            <span>Sun</span>
+            {cashFlow.map((day) => <span key={day.date}>{day.label}</span>)}
           </div>
           <div className="mt-4 flex gap-4 text-xs text-[#66746b]">
             <span className="inline-flex items-center gap-1.5">
@@ -2581,11 +3212,8 @@ function FinancialsPage({ data, role, onCreate, onExpenseAction }) {
             </div>
             <ShieldCheck className="text-[#176b54]" />
           </div>
-          {data.expenses.filter((expense) => expense.status === "pending")
-            .length ? (
-            data.expenses
-              .filter((expense) => expense.status === "pending")
-              .map((expense) => (
+          {pendingExpenses.length ? (
+            pendingExpenses.map((expense) => (
                 <div
                   key={expense.id}
                   className="mt-4 rounded-lg border border-[#e8eeea] p-3"
@@ -2659,7 +3287,7 @@ function FinancialsPage({ data, role, onCreate, onExpenseAction }) {
         />
       </Panel>
       <Panel className="mt-4">
-        <div className="px-4 py-4 sm:px-5"><h2 className="font-semibold text-[#28362e]">Daily close history</h2><p className="mt-1 text-xs text-[#78867e]">Closed days are immutable in the production system.</p></div>
+        <div className="px-4 py-4 sm:px-5"><h2 className="font-semibold text-[#28362e]">Daily close history</h2><p className="mt-1 text-xs text-[#78867e]">A closed day cannot be reopened from this screen.</p></div>
         {data.dailyClosings?.length ? <DataTable columns={[{ key: "date", label: "Date", render: (closing) => formatDate(closing.date) }, { key: "cash", label: "Cash counted", render: (closing) => formatMoney(closing.counted.cash) }, { key: "transfer", label: "Transfer", render: (closing) => formatMoney(closing.counted.transfer) }, { key: "card", label: "Card", render: (closing) => formatMoney(closing.counted.card) }, { key: "difference", label: "Difference", render: (closing) => <span className={closing.differenceKobo ? "text-amber-700" : "text-emerald-700"}>{formatMoney(closing.differenceKobo)}</span> }, { key: "closedBy", label: "Closed by" }, { key: "note", label: "Note" }]} rows={data.dailyClosings} /> : <EmptyPanel icon={ShieldCheck} title="No daily closes yet" detail="Reconcile cash, transfer, and card receipts at the end of the day." />}
       </Panel>
     </>
@@ -2775,8 +3403,7 @@ function MessagesPage({ data, onSend, onRead }) {
               </Button>
             </form>
             <p className="px-4 pb-3 text-[11px] text-[#839087]">
-              Demo messages are stored locally. Real-time delivery and email/SMS
-              fallback need backend integration.
+              Messages are saved to the property database. Guest delivery and email/SMS are not connected.
             </p>
           </div>
         ) : (
@@ -2980,12 +3607,12 @@ function ConciergePage({ data, onCreate, onRequestAction }) {
   );
 }
 
-function TeamPage({ data, role, onCreate, onSettings, onUserToggle }) {
+function TeamPage({ data, role, onCreate, onSettings, onUserToggle, onSetPassword }) {
   return (
     <>
       <PageHeader
         title="Team & settings"
-        description="Manage demo roles and property-wide operating rules."
+        description="Manage the staff directory and property-wide operating rules."
         action={
           role === "ceo" ? (
             <Button onClick={() => onCreate("user")}>
@@ -3000,8 +3627,7 @@ function TeamPage({ data, role, onCreate, onSettings, onUserToggle }) {
           <div className="px-4 py-4 sm:px-5">
             <h2 className="font-semibold text-[#28362e]">Team members</h2>
             <p className="mt-1 text-xs text-[#78867e]">
-              Role options mirror the specification. The backend must enforce
-              every permission.
+              Staff records and account status are saved in the property database.
             </p>
           </div>
           <DataTable
@@ -3026,7 +3652,7 @@ function TeamPage({ data, role, onCreate, onSettings, onUserToggle }) {
               {
                 key: "active",
                 label: "Account",
-                render: (user) => <div className="flex items-center gap-2"><Status value={user.active ? "available" : "cancelled"} />{role === "ceo" && <button onClick={() => onUserToggle(user)} className="text-xs font-medium text-[#176b54] hover:underline">{user.active ? "Deactivate" : "Activate"}</button>}</div>,
+                render: (user) => <div className="flex items-center gap-2"><Status value={user.active ? "available" : "cancelled"} />{["ceo", "manager"].includes(role) && <button onClick={() => onSetPassword(user)} className="text-xs font-medium text-[#176b54] hover:underline">Set password</button>}{role === "ceo" && <button onClick={() => onUserToggle(user)} className="text-xs font-medium text-[#176b54] hover:underline">{user.active ? "Deactivate" : "Activate"}</button>}</div>,
               },
             ]}
             rows={data.users}
@@ -3092,7 +3718,7 @@ function TeamPage({ data, role, onCreate, onSettings, onUserToggle }) {
             </div>
             <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">
               The VAT treatment and cancellation policy need hotel/accountant
-              confirmation. Changes here affect future demo quotes only.
+              confirmation. Changes apply to future reservations and charges.
             </p>
             <Button type="submit">
               <Check size={16} />
@@ -3105,9 +3731,8 @@ function TeamPage({ data, role, onCreate, onSettings, onUserToggle }) {
         <div className="flex gap-3">
           <ShieldCheck size={18} className="shrink-0 text-[#176b54]" />
           <p>
-            Changing the role selector in the top bar previews UI permissions
-            only. It does not provide authentication or secure any data;
-            production authorization belongs on the API and database.
+            The role selector is still a preview control, not a secure sign-in.
+            Production authentication and server-enforced identity are still required.
           </p>
         </div>
       </Panel>
@@ -3115,24 +3740,17 @@ function TeamPage({ data, role, onCreate, onSettings, onUserToggle }) {
   );
 }
 
-function LoginScreen({ data, onLogin }) {
-  const [email, setEmail] = useState(
-    data.users.find((user) => user.active)?.email || "",
-  );
+function LoginScreen({ onLogin }) {
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  function submit(event) {
+  const [submitting, setSubmitting] = useState(false);
+  async function submit(event) {
     event.preventDefault();
-    const user = data.users.find(
-      (item) => item.active && item.email.toLowerCase() === email.toLowerCase(),
-    );
-    if (!user || !password) {
-      setError(
-        "Choose an active demo account and enter a password to continue.",
-      );
-      return;
-    }
-    onLogin(user);
+    setSubmitting(true);
+    const result = await onLogin(email, password);
+    setError(result?.error || "");
+    setSubmitting(false);
   }
   return (
     <main className="grid min-h-screen place-items-center bg-[#f1f5f1] px-4 py-10">
@@ -3162,21 +3780,7 @@ function LoginScreen({ data, onLogin }) {
             Continue to the operations dashboard.
           </p>
           <form onSubmit={submit} className="mt-6 space-y-4">
-            <InputField
-              field={{
-                name: "email",
-                label: "Team account",
-                type: "select",
-                options: data.users
-                  .filter((user) => user.active)
-                  .map((user) => ({
-                    value: user.email,
-                    label: `${user.name} · ${user.role}`,
-                  })),
-              }}
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-            />
+            <InputField field={{ name: "email", label: "Email", type: "email" }} value={email} onChange={(event) => setEmail(event.target.value)} />
             <label className="block">
               <span className="text-sm font-medium text-[#46544c]">
                 Password
@@ -3187,7 +3791,7 @@ function LoginScreen({ data, onLogin }) {
                 onChange={(event) => setPassword(event.target.value)}
                 required
                 className="mt-1.5 w-full rounded-lg border border-[#dfe7e1] px-3 py-2.5 text-sm outline-none focus:border-[#5c9d85] focus:ring-2 focus:ring-[#176b54]/10"
-                placeholder="Enter any password for the UI demo"
+                placeholder="Your password"
               />
             </label>
             {error && (
@@ -3195,14 +3799,12 @@ function LoginScreen({ data, onLogin }) {
                 {error}
               </p>
             )}
-            <Button type="submit" className="w-full">
-              Sign in <ArrowRight size={16} />
+            <Button type="submit" className="w-full" disabled={submitting}>
+              {submitting ? "Signing in…" : "Sign in"} <ArrowRight size={16} />
             </Button>
           </form>
           <p className="mt-5 rounded-lg bg-[#f4f7f4] p-3 text-xs leading-5 text-[#718078]">
-            Front-end preview only. This sign-in does not authenticate
-            credentials or create a secure session; connect the production
-            authentication API before deployment.
+            Sign in with your individual staff account. Contact the CEO/Admin if you need an account or password reset.
           </p>
         </Panel>
         <p className="mt-4 text-center text-xs text-[#839087]">
@@ -3258,32 +3860,208 @@ function AuditPage({ data }) {
 
 function App() {
   const [data, setData] = useState(readDemoData);
+  const initialData = useRef(data);
   const [page, setPage] = useState("dashboard");
-  const [role, setRole] = useState(
-    () => localStorage.getItem("boms-demo-role") || "manager",
-  );
-  const [currentUserId, setCurrentUserId] = useState(
-    () => localStorage.getItem("boms-demo-user") || "USR-002",
-  );
-  const [signedIn, setSignedIn] = useState(
-    () => localStorage.getItem("boms-demo-session") !== "signed-out",
-  );
+  const [role, setRole] = useState("worker");
+  const [currentUserId, setCurrentUserId] = useState("");
+  const [signedIn, setSignedIn] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState("");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
+  const [databaseRooms, setDatabaseRooms] = useState([]);
+  const [roomsLoading, setRoomsLoading] = useState(true);
+  const [roomsError, setRoomsError] = useState("");
+  const [lagosClock, setLagosClock] = useState(getLagosDateTime);
+  const [fnbData, setFnbData] = useState({ categories: [], menuItems: [], orders: [], batches: [], minibarMovements: [] });
+  const [fnbLoading, setFnbLoading] = useState(true);
+  const [systemNotifications, setSystemNotifications] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/me")
+      .then(async (response) => response.ok ? response.json() : null)
+      .then((result) => {
+        if (!cancelled && result?.user) {
+          setCurrentUserId(result.user.id);
+          setRole(result.user.role);
+          setSignedIn(true);
+        }
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setAuthLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setLagosClock(getLagosDateTime()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!signedIn) return undefined;
+    const refreshStockAlerts = async () => {
+      const operationsResponse = await fetch("/api/operations");
+      if (!operationsResponse.ok) return;
+      const notificationsResponse = await fetch("/api/notifications");
+      if (notificationsResponse.ok) setSystemNotifications(await notificationsResponse.json());
+    };
+    const timer = window.setInterval(() => { void refreshStockAlerts(); }, 30000);
+    return () => window.clearInterval(timer);
+  }, [signedIn]);
+
+  useEffect(() => {
+    if (!signedIn) return;
+    const routePage = resolvePageFromRoute(`${window.location.pathname}${window.location.hash}`);
+    if (routePage && pageNames[routePage] && routePage !== page) {
+      setPage(routePage);
+    }
+    const currentRoute = buildRouteForPage(page);
+    if (window.location.pathname !== currentRoute) {
+      window.history.replaceState({}, "", currentRoute);
+    }
+  }, [signedIn, page]);
+
+  useEffect(() => {
+    if (!signedIn) return;
+    const handlePopState = () => {
+      const routePage = resolvePageFromRoute(`${window.location.pathname}${window.location.hash}`);
+      if (routePage && pageNames[routePage]) {
+        setPage(routePage);
+      }
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [signedIn]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!signedIn) return () => { cancelled = true; };
+    async function loadDatabaseData() {
+      try {
+        const bootstrapResponse = await fetch("/api/operations/bootstrap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            guests: initialData.current.guests,
+            inventory: initialData.current.inventory,
+            expenses: initialData.current.expenses,
+            suppliers: initialData.current.suppliers,
+            purchaseOrders: initialData.current.purchaseOrders,
+            conversations: initialData.current.conversations,
+            reviews: initialData.current.reviews,
+            requests: initialData.current.requests.map((request) => ({
+              ...request,
+              unitNumber: initialData.current.units.find((unit) => unit.id === request.unitId)?.number || "",
+            })),
+            users: initialData.current.users,
+            settings: { ...initialData.current.settings, servicePercent: 0, vatPercent: 0 },
+            dailyClosings: initialData.current.dailyClosings,
+          }),
+        });
+        if (!bootstrapResponse.ok) throw new Error("Demo operations data could not be moved into the database.");
+        const [roomsResponse, reservationsResponse, blocksResponse, operationsResponse, guestsResponse, fnbResponse, workspaceResponse, notificationsResponse] = await Promise.all([
+          fetch("/api/rooms"),
+          fetch("/api/reservations"),
+          fetch("/api/blocks"),
+          fetch("/api/operations"),
+          fetch("/api/guests"),
+          fetch("/api/fnb"),
+          fetch("/api/workspace"),
+          fetch("/api/notifications"),
+        ]);
+        if (!roomsResponse.ok || !reservationsResponse.ok || !blocksResponse.ok || !operationsResponse.ok || !guestsResponse.ok || !fnbResponse.ok || !workspaceResponse.ok || !notificationsResponse.ok) {
+          throw new Error("The room database could not be loaded.");
+        }
+        const rooms = await roomsResponse.json();
+        const reservations = await reservationsResponse.json();
+        const blocks = await blocksResponse.json();
+        const operations = await operationsResponse.json();
+        const databaseGuests = (await guestsResponse.json()).map((guest) => ({ ...guest, databaseGuest: true }));
+        const fnb = await fnbResponse.json();
+        const workspace = await workspaceResponse.json();
+        const notifications = await notificationsResponse.json();
+        const allDatabaseGuests = [
+          ...databaseGuests,
+          ...reservations.filter((booking) => booking.guest).map((booking) => ({ ...booking.guest, databaseGuest: true })),
+        ];
+        if (cancelled) return;
+        const units = rooms.map((room) => ({
+          id: room.id,
+          number: room.number,
+          roomTypeId: room.roomTypeId,
+          floor: room.floor || "—",
+          status: room.status,
+          rateKobo: room.rateKobo || 0,
+          maxGuests: room.maxGuests,
+          databaseRoom: true,
+        }));
+        const roomTypes = rooms.map((room) => ({
+          id: room.roomTypeId,
+          name: room.roomTypeName,
+          size: room.sizeM2 || 0,
+          bed: room.bedType || "Same size, not specified",
+          guests: room.maxGuests,
+          rateKobo: room.rateKobo || 0,
+          description: room.description || "",
+          databaseRoomType: true,
+        }));
+        setDatabaseRooms(rooms.map((room) => ({ ...room, databaseRoom: true })));
+        setFnbData(fnb);
+        setSystemNotifications(notifications);
+        setRoomsError("");
+        setData((current) => {
+          const bookingsById = new Map(current.bookings.map((booking) => [booking.id, booking]));
+          for (const booking of reservations) {
+            bookingsById.set(booking.id, { ...booking, databaseBooking: true });
+          }
+          const databaseBookingIds = new Set(reservations.map((booking) => booking.id));
+          return {
+            ...current,
+            guests: mergeById(current.guests, allDatabaseGuests),
+            bookings: [...bookingsById.values()],
+            blocks: [...current.blocks.filter((block) => !block.databaseBlock), ...blocks],
+            payments: mergeById(current.payments, operations.payments),
+            invoices: mergeById(current.invoices.filter((invoice) => !databaseBookingIds.has(invoice.bookingId)), operations.invoices),
+            inventory: mergeById(current.inventory, operations.inventory),
+            stockMovements: mergeById(current.stockMovements, operations.stockMovements),
+            expenses: mergeById(current.expenses, operations.expenses),
+            tasks: mergeById(current.tasks, operations.tasks),
+            suppliers: mergeById(current.suppliers, operations.suppliers),
+            purchaseOrders: mergeById(current.purchaseOrders, operations.purchaseOrders),
+            conversations: workspace.conversations,
+            reviews: workspace.reviews,
+            requests: workspace.requests,
+            users: workspace.users,
+            settings: { ...current.settings, ...workspace.settings },
+            dailyClosings: workspace.dailyClosings,
+            auditLogs: mergeById(current.auditLogs, workspace.auditLogs),
+            units: [...current.units.filter((unit) => !unit.databaseRoom), ...units],
+            roomTypes: [
+              ...current.roomTypes.filter((type) => !type.databaseRoomType),
+              ...roomTypes,
+            ],
+          };
+        });
+      } catch (error) {
+        if (!cancelled) setRoomsError(error.message || "The room database is unavailable.");
+      } finally {
+        if (!cancelled) setFnbLoading(false);
+        if (!cancelled) setRoomsLoading(false);
+      }
+    }
+    void loadDatabaseData();
+    return () => {
+      cancelled = true;
+    };
+  }, [signedIn]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }, [data]);
-  useEffect(() => {
-    localStorage.setItem("boms-demo-role", role);
-  }, [role]);
-  useEffect(() => {
-    localStorage.setItem("boms-demo-user", currentUserId);
-  }, [currentUserId]);
   useEffect(() => {
     const updateConnection = () => setIsOnline(navigator.onLine);
     window.addEventListener("online", updateConnection);
@@ -3301,6 +4079,218 @@ function App() {
 
   function notify(message) {
     setToast(message);
+  }
+  async function writeApi(path, method, body) {
+    const response = await fetch(path, {
+      method,
+      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "The database request failed.");
+    return result;
+  }
+  async function persistInventoryMovement(item, type, quantity, reason, note = "", costKobo = 0, expiryDate = "", batchCode = "") {
+    const result = await writeApi(`/api/inventory/${encodeURIComponent(item.id)}/movements`, "POST", {
+      type,
+      quantity,
+      reason,
+      note,
+      costKobo,
+      expiryDate,
+      batchCode,
+    });
+    updateList("inventory", (items) => items.map((entry) => entry.id === item.id ? result.item : entry));
+    updateList("stockMovements", (items) => [result.movement, ...items.filter((movement) => movement.id !== result.movement.id)]);
+    if (result.batch) setFnbData((current) => ({ ...current, batches: [result.batch, ...current.batches] }));
+    return result;
+  }
+  async function refreshPersistentOperations() {
+    const [response, fnbResponse, reservationsResponse, workspaceResponse] = await Promise.all([
+      fetch("/api/operations"),
+      fetch("/api/fnb"),
+      fetch("/api/reservations"),
+      fetch("/api/workspace"),
+    ]);
+    if (!response.ok || !fnbResponse.ok || !reservationsResponse.ok || !workspaceResponse.ok) throw new Error("Saved operations data could not be refreshed.");
+    const operations = await response.json();
+    const fnb = await fnbResponse.json();
+    const reservations = await reservationsResponse.json();
+    const workspace = await workspaceResponse.json();
+    const notificationsResponse = await fetch("/api/notifications");
+    if (notificationsResponse.ok) setSystemNotifications(await notificationsResponse.json());
+    setFnbData(fnb);
+    setData((current) => ({
+      ...current,
+      bookings: mergeById(current.bookings, reservations.map((booking) => ({ ...booking, databaseBooking: true }))),
+      guests: mergeById(current.guests, reservations.filter((booking) => booking.guest).map((booking) => ({ ...booking.guest, databaseGuest: true }))),
+      payments: mergeById(current.payments, operations.payments),
+      invoices: mergeById(current.invoices.filter((invoice) => !current.bookings.some((booking) => booking.databaseBooking && booking.id === invoice.bookingId)), operations.invoices),
+      inventory: mergeById(current.inventory, operations.inventory),
+      stockMovements: mergeById(current.stockMovements, operations.stockMovements),
+      expenses: mergeById(current.expenses, operations.expenses),
+      tasks: mergeById(current.tasks, operations.tasks),
+      suppliers: mergeById(current.suppliers, operations.suppliers),
+      purchaseOrders: mergeById(current.purchaseOrders, operations.purchaseOrders),
+      conversations: workspace.conversations,
+      reviews: workspace.reviews,
+      requests: workspace.requests,
+      users: workspace.users,
+      settings: { ...current.settings, ...workspace.settings },
+      dailyClosings: workspace.dailyClosings,
+      auditLogs: mergeById(current.auditLogs, workspace.auditLogs),
+    }));
+  }
+  async function saveMenuItem(payload) {
+    if (!allowed(role, "stock")) return { error: "Only managers and admins can create menu items." };
+    try {
+      const item = await writeApi("/api/fnb/menu-items", "POST", payload);
+      setFnbData((current) => ({
+        ...current,
+        menuItems: [...current.menuItems, item],
+        categories: current.categories.some((category) => category.name.toLowerCase() === item.category.toLowerCase())
+          ? current.categories
+          : [...current.categories, { id: item.categoryId, name: item.category, station: item.station }],
+      }));
+      return {};
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+  async function createFnbOrder(payload) {
+    try {
+      const order = await writeApi("/api/fnb/orders", "POST", payload);
+      setFnbData((current) => ({ ...current, orders: [order, ...current.orders] }));
+      notify(`${order.orderNumber} sent to the ${order.items.map((item) => item.station).filter((value, index, values) => values.indexOf(value) === index).join(" and ")}.`);
+      return {};
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+  async function updateFnbOrder(order, status) {
+    try {
+      await writeApi(`/api/fnb/orders/${encodeURIComponent(order.id)}/status`, "PATCH", {
+        status,
+        reason: status === "cancelled" ? `Cancelled by ${data.users.find((user) => user.id === currentUserId)?.name || "manager"}` : "",
+      });
+      await refreshPersistentOperations();
+      notify(`${order.orderNumber} ${status === "billed" ? "billed" : `moved to ${status}`}.`);
+    } catch (error) {
+      notify(error.message);
+    }
+  }
+  async function updateMenuAvailability(item, available) {
+    try {
+      await writeApi(`/api/fnb/menu-items/${encodeURIComponent(item.id)}/availability`, "PATCH", { available });
+      setFnbData((current) => ({ ...current, menuItems: current.menuItems.map((menuItem) => menuItem.id === item.id ? { ...menuItem, available } : menuItem) }));
+    } catch (error) {
+      notify(error.message);
+    }
+  }
+  async function refundFnbOrder(order, values) {
+    try {
+      await writeApi(`/api/fnb/orders/${encodeURIComponent(order.id)}/refunds`, "POST", values);
+      await refreshPersistentOperations();
+      notify(`${order.orderNumber} refund recorded.`);
+      return {};
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+  async function saveRoom(room, values) {
+    if (role !== "ceo") return { error: "Only an admin can edit room details." };
+    try {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(room.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(values),
+      });
+      const result = await response.json();
+      if (!response.ok) return { error: result.error || "Room details could not be saved." };
+      setDatabaseRooms((current) => current.map((item) => item.id === result.id ? { ...result, databaseRoom: true } : item));
+      setData((current) => ({
+        ...current,
+        units: current.units.map((unit) => unit.roomTypeId === result.roomTypeId
+          ? { ...unit, rateKobo: result.rateKobo || 0 }
+          : unit),
+        roomTypes: current.roomTypes.map((type) => type.databaseRoomType
+          ? {
+              ...type,
+              bed: result.bedType || type.bed,
+              rateKobo: type.id === result.roomTypeId ? result.rateKobo || 0 : type.rateKobo,
+            }
+          : type),
+      }));
+      writeAudit("room", room.id, "room details updated", room, result);
+      notify(`${room.name} saved to the room database.`);
+      return {};
+    } catch {
+      return { error: "The room database is unavailable." };
+    }
+  }
+  async function updateDatabaseRoomStatus(room, status) {
+    if (!allowed(role, "inspect")) {
+      notify("Only a manager or admin can change room status.");
+      return;
+    }
+    try {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(room.id)}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        notify(result.error || "Room status could not be changed.");
+        return;
+      }
+      setDatabaseRooms((current) => current.map((item) => item.id === room.id ? { ...item, ...result, databaseRoom: true } : item));
+      updateList("units", (items) => items.map((unit) => unit.id === room.id ? { ...unit, status } : unit));
+      writeAudit("unit", room.id, "status changed", room, result);
+      notify(`${room.name} status updated.`);
+    } catch {
+      notify("The room database is unavailable.");
+    }
+  }
+  async function persistDatabaseBookingStatus(booking, status, reason = "", refundKobo = 0) {
+    if (!booking.databaseBooking) return true;
+    try {
+      const response = await fetch(`/api/reservations/${encodeURIComponent(booking.id)}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status, reason, refundKobo }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        notify(result.error || "Reservation status could not be saved.");
+        return false;
+      }
+      const roomStatus = status === "checked_in" ? "occupied" : status === "checked_out" ? "dirty" : null;
+      if (roomStatus) {
+        setDatabaseRooms((current) => current.map((room) => room.id === booking.unitId ? { ...room, status: roomStatus } : room));
+      }
+      if (result.housekeepingTask) {
+        const savedTask = result.housekeepingTask;
+        updateList("tasks", (items) => [{
+          id: savedTask.id,
+          unitId: savedTask.unit_id,
+          bookingId: savedTask.booking_id,
+          type: savedTask.type,
+          status: savedTask.status,
+          priority: savedTask.priority[0].toUpperCase() + savedTask.priority.slice(1),
+          assignedTo: savedTask.assigned_to_label || "Unassigned",
+          updatedAt: savedTask.updated_at,
+          databaseTask: true,
+        }, ...items.filter((item) => item.id !== savedTask.id)]);
+      }
+      if (result.refunds?.length) {
+        updateList("payments", (items) => mergeById(items, result.refunds));
+      }
+      return true;
+    } catch {
+      notify("The reservation database is unavailable.");
+      return false;
+    }
   }
   function updateList(key, updater) {
     setData((current) => ({ ...current, [key]: updater(current[key] || []) }));
@@ -3324,24 +4314,55 @@ function App() {
     setPage(nextPage);
     setSearch("");
     setMobileNavOpen(false);
+    if (signedIn) {
+      const url = buildRouteForPage(nextPage);
+      const current = `${window.location.pathname}${window.location.hash}`;
+      if (current !== url) {
+        window.history.pushState({}, "", url);
+      }
+    }
   }
-  function signIn(user) {
-    setCurrentUserId(user.id);
-    setRole(user.role);
-    setSignedIn(true);
-    localStorage.removeItem("boms-demo-session");
-    navigate("dashboard");
+  async function markNotificationRead(notification) {
+    try {
+      await writeApi(`/api/notifications/${encodeURIComponent(notification.id)}/read`, "PATCH", {});
+      setSystemNotifications((items) => items.map((item) => item.id === notification.id ? { ...item, read: true } : item));
+    } catch (error) {
+      notify(error.message);
+    }
   }
-  function signOut() {
+  async function signIn(email, password) {
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) return { error: result.error || "Sign in failed." };
+      setCurrentUserId(result.user.id);
+      setRole(result.user.role);
+      setSignedIn(true);
+      setPage("dashboard");
+      window.history.replaceState({}, "", appRoutes.dashboard);
+      return {};
+    } catch {
+      return { error: "The sign-in service is unavailable." };
+    }
+  }
+  async function signOut() {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     setSignedIn(false);
-    localStorage.setItem("boms-demo-session", "signed-out");
+    setCurrentUserId("");
+    setRole("worker");
+    setPage("dashboard");
+    window.history.replaceState({}, "", "/login");
   }
   function requestCreate(type, record = null) {
     const requiredPermission = {
       booking: "booking", guest: "booking", unit: "inspect", roomType: "inspect", rateRule: "inspect",
       task: "inspect", request: "concierge", item: "inspect", purchase: "purchase",
       stock: "stock", stockOut: "stock_use", stockAdjust: "stock", expense: "expense",
-      user: "all", refund: "refund", voidInvoice: "cancel",
+      user: "all", setPassword: "all", refund: "refund", voidInvoice: "cancel",
     }[type];
     if (requiredPermission && !allowed(role, requiredPermission)) {
       notify("Your current role cannot perform that action.");
@@ -3350,7 +4371,7 @@ function App() {
     setModal({ type, record });
   }
 
-  function saveBooking(payload) {
+  async function saveBooking(payload) {
     const unit = data.units.find((item) => item.id === payload.unitId);
     if (
       !unit ||
@@ -3370,10 +4391,48 @@ function App() {
       notify("Only managers can edit confirmed or held reservations.");
       return;
     }
-    const bookingId = existing?.id || makeCode("BA-B", data.bookings);
+    let bookingId = existing?.id || makeCode("BA-B", data.bookings);
+    if (unit.databaseRoom) {
+      try {
+        const response = await fetch(
+          existing?.databaseBooking
+            ? `/api/reservations/${encodeURIComponent(existing.id)}`
+            : "/api/reservations",
+          {
+            method: existing?.databaseBooking ? "PUT" : "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              guestId: payload.guestId,
+              guest: guestFor(data, payload.guestId),
+              unitId: payload.unitId,
+              checkIn: payload.checkIn,
+              checkOut: payload.checkOut,
+              adults: payload.adults,
+              children: payload.children,
+              source: payload.source,
+              requests: payload.requests,
+              status: payload.status,
+              discountKobo: payload.quote.discountKobo,
+              servicePercent: data.settings.servicePercent,
+              vatPercent: data.settings.vatPercent,
+            }),
+          },
+        );
+        const result = await response.json();
+        if (!response.ok) {
+          notify(result.error || "The reservation could not be saved.");
+          return;
+        }
+        bookingId = result.id;
+      } catch {
+        notify("The reservation database is unavailable.");
+        return;
+      }
+    }
     const booking = {
       ...existing,
       id: bookingId,
+      databaseBooking: Boolean(unit.databaseRoom) || existing?.databaseBooking,
       guestId: payload.guestId,
       unitId: payload.unitId,
       checkIn: payload.checkIn,
@@ -3419,7 +4478,7 @@ function App() {
     notify(`${bookingId} created and availability checked.`);
   }
 
-  function saveRecord(type, values, record) {
+  async function saveRecord(type, values, record) {
     const amountKobo = Math.round(Number(values.amountNaira || 0) * 100);
     const costKobo = Math.round(Number(values.costNaira || 0) * 100);
     const today = TODAY;
@@ -3436,7 +4495,7 @@ function App() {
         );
         return;
       }
-      const guest = {
+      const guestPayload = {
         id: makeCode("G-", data.guests),
         name: values.name,
         phone: values.phone,
@@ -3446,6 +4505,13 @@ function App() {
         tier: "Silver",
         points: 0,
       };
+      let guest;
+      try {
+        guest = { ...(await writeApi("/api/guests", "POST", guestPayload)), databaseGuest: true };
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
       updateList("guests", (items) => [guest, ...items]);
     } else if (type === "roomType") {
       if (
@@ -3516,7 +4582,7 @@ function App() {
         );
         return;
       }
-      const payment = {
+      let payment = {
         id: makeCode("PAY-", data.payments),
         bookingId: booking.id,
         method: values.method,
@@ -3525,6 +4591,19 @@ function App() {
         reference: values.reference || makeCode("REF-", data.payments),
         paidAt: today,
       };
+      if (booking.databaseBooking) {
+        try {
+          payment = await writeApi("/api/payments", "POST", {
+            bookingId: booking.id,
+            amountKobo,
+            method: values.method,
+            reference: payment.reference,
+          });
+        } catch (error) {
+          notify(error.message);
+          return;
+        }
+      }
       updateList("payments", (items) => [payment, ...items]);
       if (payment.status === "paid") {
         updateList("bookings", (items) =>
@@ -3581,7 +4660,7 @@ function App() {
         );
         return;
       }
-      const refund = {
+      let refund = {
         id: makeCode("PAY-", data.payments),
         bookingId: payment.bookingId,
         originalPaymentId: payment.id,
@@ -3592,6 +4671,17 @@ function App() {
         paidAt: today,
         reason: values.reason,
       };
+      if (payment.databasePayment) {
+        try {
+          refund = await writeApi(`/api/payments/${encodeURIComponent(payment.id)}/refunds`, "POST", {
+            amountKobo,
+            reason: values.reason,
+          });
+        } catch (error) {
+          notify(error.message);
+          return;
+        }
+      }
       updateList("payments", (items) => [refund, ...items]);
       updateList("bookings", (items) =>
         items.map((item) =>
@@ -3613,7 +4703,7 @@ function App() {
       );
       writeAudit("payment", payment.id, "refunded", payment, refund);
     } else if (type === "item") {
-      const item = {
+      const itemPayload = {
         id: makeCode("IT-", data.inventory),
         name: values.name,
         category: values.category,
@@ -3623,6 +4713,13 @@ function App() {
         costKobo,
         supplierId: "",
       };
+      let item;
+      try {
+        item = await writeApi("/api/inventory/items", "POST", itemPayload);
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
       updateList("inventory", (items) => [item, ...items]);
     } else if (type === "stock") {
       const item = data.inventory.find((entry) => entry.id === values.itemId);
@@ -3631,6 +4728,14 @@ function App() {
         notify("Enter a valid quantity.");
         return;
       }
+      if (item.databaseItem) {
+        try {
+          await persistInventoryMovement(item, "in", quantity, values.note || "Stock received", "", costKobo, values.expiryDate || "", values.batchCode || "");
+        } catch (error) {
+          notify(error.message);
+          return;
+        }
+      } else {
       updateList("inventory", (items) =>
         items.map((entry) =>
           entry.id === item.id
@@ -3653,6 +4758,7 @@ function App() {
         },
         ...items,
       ]);
+      }
     } else if (type === "stockOut") {
       if (!allowed(role, "stock_use")) { notify("Your role cannot record stock use."); return; }
       const item = data.inventory.find((entry) => entry.id === values.itemId);
@@ -3661,6 +4767,14 @@ function App() {
         notify("Quantity must be above zero and cannot exceed current stock.");
         return;
       }
+      if (item.databaseItem) {
+        try {
+          await persistInventoryMovement(item, "out", quantity, values.reason, values.note || "");
+        } catch (error) {
+          notify(error.message);
+          return;
+        }
+      } else {
       updateList("inventory", (items) =>
         items.map((entry) =>
           entry.id === item.id
@@ -3679,6 +4793,7 @@ function App() {
         },
         ...items,
       ]);
+      }
     } else if (type === "stockAdjust") {
       if (!allowed(role, "stock")) {
         notify("Stock adjustments require manager approval.");
@@ -3692,6 +4807,17 @@ function App() {
       }
       const difference = counted - item.quantity;
       if (difference) {
+        if (item.databaseItem) {
+          try {
+            const result = await writeApi(`/api/inventory/${encodeURIComponent(item.id)}/count`, "POST", { count: counted, reason: values.note });
+            updateList("inventory", (items) => items.map((entry) => entry.id === item.id ? result.item : entry));
+            if (result.movement) updateList("stockMovements", (items) => [result.movement, ...items]);
+            await refreshPersistentOperations();
+          } catch (error) {
+            notify(error.message);
+            return;
+          }
+        } else {
         updateList("inventory", (items) =>
           items.map((entry) =>
             entry.id === item.id ? { ...entry, quantity: counted } : entry,
@@ -3708,20 +4834,50 @@ function App() {
           },
           ...items,
         ]);
+        }
+      }
+    } else if (type === "minibar") {
+      if (!record?.databaseItem || !values.unitId || Number(values.quantity) <= 0) {
+        notify("Choose a room and a valid minibar quantity.");
+        return;
+      }
+      try {
+        await writeApi(`/api/inventory/${encodeURIComponent(record.id)}/minibar`, "POST", {
+          unitId: values.unitId,
+          bookingId: values.bookingId || "",
+          quantity: Number(values.quantity),
+          unitPriceKobo: Math.round(Number(values.unitPriceNaira || 0) * 100),
+          reason: values.reason || "Minibar consumption",
+        });
+        await refreshPersistentOperations();
+        setModal(null);
+        notify(`${record.name} minibar use recorded.`);
+        return;
+      } catch (error) {
+        notify(error.message);
+        return;
       }
     } else if (type === "purchase") {
-      const order = {
+      const orderPayload = {
         id: makeCode("PO-", data.purchaseOrders),
         supplierId: values.supplierId,
         itemId: values.itemId,
         quantity: Number(values.quantity),
         costKobo,
+        expiryDate: values.expiryDate || "",
         status: "draft",
         date: today,
       };
+      let order;
+      try {
+        order = await writeApi("/api/purchase-orders", "POST", orderPayload);
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
       updateList("purchaseOrders", (items) => [order, ...items]);
     } else if (type === "expense") {
-      const expense = {
+      const expensePayload = {
         id: makeCode("EXP-", data.expenses),
         category: values.category,
         amountKobo,
@@ -3729,22 +4885,30 @@ function App() {
         status: amountKobo > 10000000 ? "pending" : "approved",
         date: today,
       };
+      let expense;
+      try {
+        expense = await writeApi("/api/expenses", "POST", expensePayload);
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
       updateList("expenses", (items) => [expense, ...items]);
     } else if (type === "dayClose") {
       if (data.dailyClosings.some((closing) => closing.date === today)) {
         notify("This date has already been closed and cannot be edited.");
         return;
       }
-      const methods = ["Cash", "Transfer", "Card"];
-      const expected = Object.fromEntries(methods.map((method) => [method.toLowerCase(), data.payments.filter((payment) => payment.status === "paid" && payment.paidAt === today && payment.method === method).reduce((sum, payment) => sum + payment.amountKobo, 0)]));
       const counted = { cash: Math.round(Number(values.cashNaira || 0) * 100), transfer: Math.round(Number(values.transferNaira || 0) * 100), card: Math.round(Number(values.cardNaira || 0) * 100) };
-      const differenceKobo = Object.keys(counted).reduce((sum, method) => sum + counted[method] - expected[method], 0);
-      if (differenceKobo !== 0 && !values.note?.trim()) { notify("Add a note explaining the reconciliation difference."); return; }
-      const closing = { id: makeCode("CLOSE-", data.dailyClosings), date: today, expected, counted, differenceKobo, note: values.note || "Balanced", closedBy: currentUser.name, closedAt: getTimestamp() };
+      let closing;
+      try {
+        closing = await writeApi("/api/daily-closings", "POST", { date: today, counted, note: values.note || "" });
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
       updateList("dailyClosings", (items) => [closing, ...items]);
-      writeAudit("daily_close", closing.id, "closed", null, closing);
     } else if (type === "task") {
-      const task = {
+      const taskPayload = {
         id: makeCode("HK-", data.tasks),
         unitId: values.unitId,
         type: values.type,
@@ -3753,6 +4917,19 @@ function App() {
         assignedTo: values.assignedTo,
         updatedAt: "Now",
       };
+      const unit = data.units.find((item) => item.id === taskPayload.unitId);
+      let task = taskPayload;
+      if (unit?.databaseRoom) {
+        try {
+          task = await writeApi("/api/housekeeping/tasks", "POST", {
+            ...taskPayload,
+            bookingId: data.bookings.find((booking) => booking.id === values.bookingId)?.databaseBooking ? values.bookingId : "",
+          });
+        } catch (error) {
+          notify(error.message);
+          return;
+        }
+      }
       updateList("tasks", (items) => [task, ...items]);
       if (values.type === "Checkout clean")
         updateList("units", (items) =>
@@ -3761,28 +4938,39 @@ function App() {
           ),
         );
     } else if (type === "request") {
-      const request = {
-        id: makeCode("CON-", data.requests),
-        guestId: values.guestId,
-        unitId: values.unitId,
-        type: values.type,
-        details: values.details,
-        status: "open",
-        assignedTo: values.assignedTo,
-        costKobo: costKobo,
-      };
+      const unit = unitFor(data, values.unitId);
+      let request;
+      try {
+        request = await writeApi("/api/concierge", "POST", {
+          guestId: values.guestId,
+          unitId: unit?.databaseRoom ? unit.id : unit?.number,
+          type: values.type,
+          details: values.details,
+          assignedTo: values.assignedTo,
+          costKobo,
+        });
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
       updateList("requests", (items) => [request, ...items]);
     } else if (type === "user") {
-      updateList("users", (items) => [
-        {
-          id: makeCode("USR-", items),
-          name: values.name,
-          email: values.email,
-          role: values.role,
-          active: true,
-        },
-        ...items,
-      ]);
+      let user;
+      try {
+        user = await writeApi("/api/users", "POST", values);
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
+      updateList("users", (items) => [user, ...items]);
+    } else if (type === "setPassword") {
+      try {
+        await writeApi(`/api/users/${encodeURIComponent(record.id)}/password`, "PUT", { password: values.password });
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
+      notify(`Password updated for ${record.name}.`);
     } else if (type === "checkout") {
       const booking = record;
       const amount = amountKobo;
@@ -3808,7 +4996,7 @@ function App() {
         return;
       }
       if (amount > 0) {
-        const payment = {
+        let payment = {
           id: makeCode("PAY-", data.payments),
           bookingId: booking.id,
           method: values.method,
@@ -3817,6 +5005,23 @@ function App() {
           reference: makeCode("REF-", data.payments),
           paidAt: today,
         };
+        if (booking.databaseBooking) {
+          if (values.method === "Bill to company") {
+            notify("Company balances are not cash payments. Do not enter them as collected funds.");
+            return;
+          }
+          try {
+            payment = await writeApi("/api/payments", "POST", {
+              bookingId: booking.id,
+              amountKobo: amount,
+              method: values.method,
+              reference: payment.reference,
+            });
+          } catch (error) {
+            notify(error.message);
+            return;
+          }
+        }
         updateList("payments", (items) => [payment, ...items]);
         updateList("bookings", (items) =>
           items.map((item) =>
@@ -3826,7 +5031,7 @@ function App() {
           ),
         );
       }
-      finishCheckout(booking, values.reason);
+      if (!(await finishCheckout(booking, values.reason))) return;
     } else if (type === "cancel") {
       if (!allowed(role, "cancel")) {
         notify("Cancellation requires manager approval.");
@@ -3843,14 +5048,15 @@ function App() {
       );
       const refund = Math.max(0, booking.paidKobo - fee);
       if (role === "manager" && refund > 5000000) { notify("Refunds above ₦50,000 require CEO approval."); return; }
+      if (!(await persistDatabaseBookingStatus(booking, "cancelled", values.reason, booking.databaseBooking ? refund : 0))) return;
       updateList("bookings", (items) =>
         items.map((item) =>
           item.id === booking.id
-            ? { ...item, status: "cancelled", cancelReason: values.reason }
+            ? { ...item, status: "cancelled", cancelReason: values.reason, paidKobo: Math.max(0, item.paidKobo - refund) }
             : item,
         ),
       );
-      if (refund > 0)
+      if (refund > 0 && !booking.databaseBooking)
         updateList("payments", (items) => [
           {
             id: makeCode("PAY-", items),
@@ -3876,25 +5082,55 @@ function App() {
       }
       const conflict = data.bookings.some((booking) => booking.unitId === record.id && ["hold", "confirmed", "checked_in"].includes(booking.status) && booking.checkIn < values.end && booking.checkOut > values.start);
       if (conflict) { notify("Move overlapping bookings before blocking this unit."); return; }
-      const block = {
-        id: makeCode("BLK-", data.blocks || []),
-        unitId: record.id,
-        start: values.start,
-        end: values.end,
-        reason: values.reason,
-      };
+      let block;
+      if (record.databaseRoom) {
+        try {
+          const response = await fetch(`/api/rooms/${encodeURIComponent(record.id)}/blocks`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(values),
+          });
+          const result = await response.json();
+          if (!response.ok) {
+            notify(result.error || "Room dates could not be blocked.");
+            return;
+          }
+          block = { ...result, databaseBlock: true };
+        } catch {
+          notify("The room database is unavailable.");
+          return;
+        }
+      } else {
+        block = {
+          id: makeCode("BLK-", data.blocks || []),
+          unitId: record.id,
+          start: values.start,
+          end: values.end,
+          reason: values.reason,
+        };
+      }
       updateList("blocks", (items) => [block, ...items]);
       writeAudit("unit", record.id, "blocked", record, block);
     } else if (type === "reply") {
-      updateList("reviews", (items) =>
-        items.map((item) =>
-          item.id === record.id ? { ...item, reply: values.reply } : item,
-        ),
-      );
+      try {
+        await writeApi(`/api/reviews/${encodeURIComponent(record.id)}/reply`, "PATCH", { reply: values.reply });
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
+      updateList("reviews", (items) => items.map((item) => item.id === record.id ? { ...item, reply: values.reply } : item));
     } else if (type === "voidInvoice") {
       if (!allowed(role, "cancel") || record.status === "paid" || !values.reason?.trim()) {
         notify("Only a manager or CEO can void an unpaid invoice with a reason.");
         return;
+      }
+      if (record.databaseInvoice) {
+        try {
+          await writeApi(`/api/invoices/${encodeURIComponent(record.id)}/status`, "PATCH", { status: "void", reason: values.reason });
+        } catch (error) {
+          notify(error.message);
+          return;
+        }
       }
       updateList("invoices", (items) => items.map((invoice) => invoice.id === record.id ? { ...invoice, status: "void", voidReason: values.reason } : invoice));
       writeAudit("invoice", record.id, "voided", record, { ...record, status: "void", voidReason: values.reason });
@@ -3919,7 +5155,8 @@ function App() {
     );
   }
 
-  function finishCheckout(booking, reason = "") {
+  async function finishCheckout(booking, reason = "") {
+    if (!(await persistDatabaseBookingStatus(booking, "checked_out", reason))) return false;
     const unit = unitFor(data, booking.unitId);
     const task = {
       id: makeCode("HK-", data.tasks),
@@ -3946,7 +5183,7 @@ function App() {
         item.id === booking.unitId ? { ...item, status: "dirty" } : item,
       ),
     );
-    updateList("tasks", (items) => [task, ...items]);
+    if (!booking.databaseBooking) updateList("tasks", (items) => [task, ...items]);
     const earnedPoints = Math.floor(
       (booking.subtotalKobo || unit?.rateKobo * nightsBetween(booking.checkIn, booking.checkOut) || 0) / 10000,
     );
@@ -3970,9 +5207,10 @@ function App() {
             : invoice,
         ),
       );
+    return true;
   }
 
-  function bookingAction(booking, action) {
+  async function bookingAction(booking, action) {
     if (action === "edit") {
       if (!allowed(role, "edit_booking")) { notify("Only a manager or CEO can edit a reservation."); return; }
       setModal({ type: "booking", record: booking });
@@ -3994,6 +5232,7 @@ function App() {
         );
         return;
       }
+      if (!(await persistDatabaseBookingStatus(booking, "checked_in"))) return;
       updateList("bookings", (items) =>
         items.map((item) =>
           item.id === booking.id
@@ -4022,7 +5261,7 @@ function App() {
         }
         setModal({ type: "checkout", record: booking });
       } else {
-        finishCheckout(booking);
+        if (!(await finishCheckout(booking))) return;
         notify(`${booking.id} checked out. A housekeeping task was created.`);
       }
     } else if (action === "cancel") {
@@ -4036,6 +5275,7 @@ function App() {
         notify("Only a manager or CEO can mark a no-show.");
         return;
       }
+      if (!(await persistDatabaseBookingStatus(booking, "no_show"))) return;
       updateList("bookings", (items) =>
         items.map((item) =>
           item.id === booking.id ? { ...item, status: "no_show" } : item,
@@ -4047,31 +5287,37 @@ function App() {
       if (!allowed(role, "cancel")) { notify("Only a manager or CEO can restore a booking."); return; }
       const unit = unitFor(data, booking.unitId);
       if (!unit || !isUnitAvailable(unit, booking.checkIn, booking.checkOut, data.bookings.filter((item) => item.id !== booking.id), data.blocks || [])) { notify("That unit is no longer available for these dates."); return; }
+      if (!(await persistDatabaseBookingStatus(booking, "confirmed"))) return;
       updateList("bookings", (items) => items.map((item) => item.id === booking.id ? { ...item, status: "confirmed" } : item));
       writeAudit("booking", booking.id, "restored", booking, { ...booking, status: "confirmed" });
       notify(`${booking.id} restored.`);
     }
   }
 
-  function taskAction(task, status) {
+  async function taskAction(task, status) {
     if (status === "inspected" && !allowed(role, "inspect")) {
       notify("Only a manager or CEO can inspect a room.");
       return;
     }
+    let updatedTask = {
+      ...task,
+      status,
+      updatedAt: "Now",
+      ...(status === "in_progress" ? { startedAt: getTimestamp() } : {}),
+      ...(status === "done" ? { finishedAt: getTimestamp() } : {}),
+    };
+    if (task.databaseTask) {
+      try {
+        updatedTask = await writeApi(`/api/housekeeping/tasks/${encodeURIComponent(task.id)}/status`, "PATCH", { status });
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
+    }
     updateList("tasks", (items) =>
       items.map((item) =>
         item.id === task.id
-          ? {
-              ...item,
-              status,
-              updatedAt: "Now",
-              ...(status === "in_progress"
-                ? { startedAt: getTimestamp() }
-                : {}),
-              ...(status === "done"
-                ? { finishedAt: getTimestamp() }
-                : {}),
-            }
+          ? updatedTask
           : item,
       ),
     );
@@ -4095,7 +5341,7 @@ function App() {
     );
   }
 
-  function purchaseAction(order, status) {
+  async function purchaseAction(order, status) {
     if (status === "approved" && !allowed(role, "purchase")) {
       notify("Only a manager or CEO can approve purchase orders.");
       return;
@@ -4107,6 +5353,19 @@ function App() {
     }
     if (status === "received" && order.status !== "approved") {
       notify("Approve this purchase order before receiving it.");
+      return;
+    }
+    if (order.databasePurchaseOrder) {
+      try {
+        const savedOrder = await writeApi(`/api/purchase-orders/${encodeURIComponent(order.id)}/status`, "PATCH", { status });
+        updateList("purchaseOrders", (items) => items.map((item) => item.id === order.id ? savedOrder : item));
+        if (status === "received") await refreshPersistentOperations();
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
+      writeAudit("purchase_order", order.id, status, order, { ...order, status });
+      notify(`Purchase order ${order.id} ${status}.`);
       return;
     }
     updateList("purchaseOrders", (items) =>
@@ -4154,48 +5413,91 @@ function App() {
   function openBlock(unit) {
     setModal({ type: "block", record: unit });
   }
-  function sendMessage(conversationId, text) {
+  async function sendMessage(conversationId, text) {
+    const conversation = data.conversations.find((item) => item.id === conversationId);
+    if (!conversation?.databaseConversation) {
+      notify("This conversation is not connected to a saved guest record.");
+      return;
+    }
+    let message;
+    try {
+      message = await writeApi(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, "POST", { body: text });
+    } catch (error) {
+      notify(error.message);
+      return;
+    }
     updateList("conversations", (items) =>
       items.map((conversation) =>
         conversation.id === conversationId
           ? {
               ...conversation,
               unread: 0,
-              messages: [...conversation.messages, { from: "staff", text }],
+              messages: [...conversation.messages, message],
             }
           : conversation,
       ),
     );
-    notify("Message added to the local demo conversation.");
+    notify("Message saved.");
   }
-  function settingsSave(values) {
+  async function markConversationRead(conversationId) {
+    const conversation = data.conversations.find((item) => item.id === conversationId);
+    if (conversation?.databaseConversation) {
+      try {
+        await writeApi(`/api/conversations/${encodeURIComponent(conversationId)}/read`, "PATCH", {});
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
+    }
+    updateList("conversations", (items) => items.map((item) => item.id === conversationId ? { ...item, unread: 0 } : item));
+  }
+  async function settingsSave(values) {
     if (role !== "ceo") {
       notify("Only the CEO can change property settings.");
       return;
     }
+    const settings = {
+      checkInTime: values.checkInTime,
+      checkOutTime: values.checkOutTime,
+      servicePercent: Number(values.servicePercent),
+      vatPercent: Number(values.vatPercent),
+    };
+    try {
+      await writeApi("/api/settings", "PUT", settings);
+    } catch (error) {
+      notify(error.message);
+      return;
+    }
     setData((current) => ({
       ...current,
-      settings: {
-        ...current.settings,
-        checkInTime: values.checkInTime,
-        checkOutTime: values.checkOutTime,
-        servicePercent: Number(values.servicePercent),
-        vatPercent: Number(values.vatPercent),
-      },
+      settings: { ...current.settings, ...settings },
     }));
-    writeAudit("settings", "property", "updated", data.settings, values);
-    notify("Property rules updated for future demo quotes.");
+    notify("Property rules saved.");
   }
-  function toggleUser(user) {
+  async function toggleUser(user) {
     if (role !== "ceo" || user.id === currentUserId) {
       notify("A CEO cannot deactivate the active account from this screen.");
       return;
     }
-    updateList("users", (items) => items.map((item) => item.id === user.id ? { ...item, active: !item.active } : item));
-    writeAudit("user", user.id, user.active ? "deactivated" : "activated", user, { ...user, active: !user.active });
-    notify(`${user.name} ${user.active ? "deactivated" : "activated"}.`);
+    let saved;
+    try {
+      saved = await writeApi(`/api/users/${encodeURIComponent(user.id)}/active`, "PATCH", { active: !user.active });
+    } catch (error) {
+      notify(error.message);
+      return;
+    }
+    updateList("users", (items) => items.map((item) => item.id === user.id ? saved : item));
+    notify(`${user.name} ${saved.active ? "activated" : "deactivated"}.`);
   }
-  function issueInvoice(invoice) {
+  async function issueInvoice(invoice) {
+    if (invoice.databaseInvoice) {
+      try {
+        await writeApi(`/api/invoices/${encodeURIComponent(invoice.id)}/status`, "PATCH", { status: "issued" });
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
+    }
     updateList("invoices", (items) =>
       items.map((item) =>
         item.id === invoice.id
@@ -4226,6 +5528,18 @@ function App() {
     (sum, conversation) => sum + conversation.unread,
     0,
   );
+  const unreadSystemNotifications = systemNotifications.filter((notification) => !notification.read);
+  const checkoutFollowUps = role === "worker" && lagosClock.time >= "13:00"
+    ? data.bookings.filter((booking) =>
+        booking.status === "checked_in" && booking.checkOut === lagosClock.date,
+      )
+    : [];
+  const housekeepingPrepAlerts = ["worker", "manager"].includes(role) &&
+    lagosClock.time >= "11:30" && lagosClock.time < "13:00"
+    ? data.bookings.filter((booking) =>
+        booking.status === "checked_in" && booking.checkOut === lagosClock.date,
+      )
+    : [];
   const currentUser =
     data.users.find((user) => user.id === currentUserId) || data.users[0];
   const visibleNavGroups = navGroups
@@ -4268,10 +5582,10 @@ function App() {
       ],
       rooms: [
         "unit,room_type,status,rate_kobo",
-        ...data.units.map((unit) =>
+        ...(databaseRooms.length ? databaseRooms : data.units).map((unit) =>
           [
             unit.number,
-            roomTypeFor(data, unit.roomTypeId)?.name,
+            unit.roomTypeName || roomTypeFor(data, unit.roomTypeId)?.name,
             unit.status,
             unit.rateKobo,
           ].join(","),
@@ -4340,6 +5654,8 @@ function App() {
           onNavigate={navigate}
           onCreate={requestCreate}
           onBookingAction={bookingAction}
+          housekeepingPrepAlerts={housekeepingPrepAlerts}
+          checkoutFollowUps={checkoutFollowUps}
         />
       );
       break;
@@ -4369,24 +5685,16 @@ function App() {
     case "rooms":
       content = (
         <RoomsPage
-          data={data}
+          rooms={databaseRooms}
           search={search}
           onSearch={setSearch}
           role={role}
           onCreate={requestCreate}
+          onEditRoom={(room) => setModal({ type: "roomEditor", record: room })}
           onBlock={openBlock}
-          onUnitStatus={(unit, status) => {
-            updateList("units", (items) =>
-              items.map((item) =>
-                item.id === unit.id ? { ...item, status } : item,
-              ),
-            );
-            writeAudit("unit", unit.id, "status changed", unit, {
-              ...unit,
-              status,
-            });
-            notify(`Unit ${unit.number} returned to service.`);
-          }}
+          onUnitStatus={updateDatabaseRoomStatus}
+          loading={roomsLoading}
+          error={roomsError}
         />
       );
       break;
@@ -4404,6 +5712,21 @@ function App() {
         />
       );
       break;
+    case "restaurant":
+      content = (
+        <RestaurantPage
+          data={data}
+          fnbData={fnbData}
+          role={role}
+          loading={fnbLoading}
+          onAddMenu={() => setModal({ type: "fnbMenu" })}
+          onNewOrder={() => setModal({ type: "fnbOrder" })}
+          onStatus={updateFnbOrder}
+          onAvailability={updateMenuAvailability}
+          onRefund={(order) => setModal({ type: "fnbRefund", record: order })}
+        />
+      );
+      break;
     case "inventory":
       content = (
         <InventoryPage
@@ -4412,8 +5735,10 @@ function App() {
           search={search}
           onSearch={setSearch}
           onCreate={requestCreate}
+          batches={fnbData.batches}
+          minibarMovements={fnbData.minibarMovements}
           onStock={(type, item) => {
-            const permission = type === "stockOut" ? "stock_use" : "stock";
+            const permission = ["stockOut", "minibar"].includes(type) ? "stock_use" : "stock";
             if (!allowed(role, permission)) {
               notify("Your current role cannot perform that stock action.");
               return;
@@ -4461,12 +5786,22 @@ function App() {
         ) : (
           <FinancialsPage
             data={data}
+            fnbData={fnbData}
             role={role}
             onCreate={requestCreate}
-            onExpenseAction={(expense, status) => {
+            onExpenseAction={async (expense, status) => {
+              let savedExpense = { ...expense, status };
+              if (expense.databaseExpense) {
+                try {
+                  savedExpense = await writeApi(`/api/expenses/${encodeURIComponent(expense.id)}/status`, "PATCH", { status });
+                } catch (error) {
+                  notify(error.message);
+                  return;
+                }
+              }
               updateList("expenses", (items) =>
                 items.map((item) =>
-                  item.id === expense.id ? { ...item, status } : item,
+                  item.id === expense.id ? savedExpense : item,
                 ),
               );
               writeAudit("expense", expense.id, status, expense, {
@@ -4479,7 +5814,7 @@ function App() {
         );
       break;
     case "messages":
-      content = <MessagesPage data={data} onSend={sendMessage} onRead={(id) => updateList("conversations", (items) => items.map((item) => item.id === id ? { ...item, unread: 0 } : item))} />;
+      content = <MessagesPage data={data} onSend={sendMessage} onRead={markConversationRead} />;
       break;
     case "reviews":
       content = (
@@ -4494,27 +5829,14 @@ function App() {
         <ConciergePage
           data={data}
           onCreate={requestCreate}
-          onRequestAction={(request, status) => {
-            updateList("requests", (items) =>
-              items.map((item) =>
-                item.id === request.id ? { ...item, status } : item,
-              ),
-            );
-            if (status === "done" && request.costKobo) {
-              const booking = data.bookings.find((item) => item.guestId === request.guestId && item.unitId === request.unitId && item.status === "checked_in");
-              if (booking) {
-                const subtotalKobo = (booking.subtotalKobo || booking.totalKobo) + request.costKobo;
-                const serviceKobo = Math.round(subtotalKobo * data.settings.servicePercent / 100);
-                const vatKobo = Math.round(subtotalKobo * data.settings.vatPercent / 100);
-                const totalKobo = subtotalKobo + serviceKobo + vatKobo;
-                updateList("bookings", (items) => items.map((item) => item.id === booking.id ? { ...item, subtotalKobo, serviceKobo, vatKobo, totalKobo } : item));
-                updateList("invoices", (items) => items.map((invoice) => invoice.bookingId === booking.id ? { ...invoice, totalKobo } : invoice));
-                writeAudit("booking", booking.id, "concierge extra added", booking, { ...booking, subtotalKobo, totalKobo, extraKobo: request.costKobo });
-                notify(`${formatMoney(request.costKobo)} added to ${booking.id}'s folio.`);
-              } else notify("Request completed; no matching in-house booking was found for folio billing.");
-            } else {
-              writeAudit("concierge", request.id, status, request, { ...request, status });
-              notify(`Request ${status}.`);
+          onRequestAction={async (request, status) => {
+            try {
+              await writeApi(`/api/concierge/${encodeURIComponent(request.id)}/status`, "PATCH", { status });
+              updateList("requests", (items) => items.map((item) => item.id === request.id ? { ...item, status } : item));
+              if (status === "done" && request.costKobo) await refreshPersistentOperations();
+              notify(status === "done" && request.costKobo ? `${formatMoney(request.costKobo)} added to the guest folio.` : `Request ${status}.`);
+            } catch (error) {
+              notify(error.message);
             }
           }}
         />
@@ -4528,6 +5850,7 @@ function App() {
           onCreate={requestCreate}
           onSettings={settingsSave}
           onUserToggle={toggleUser}
+          onSetPassword={(user) => setModal({ type: "setPassword", record: user })}
         />
       );
       break;
@@ -4558,7 +5881,8 @@ function App() {
       );
   }
 
-  if (!signedIn) return <LoginScreen data={data} onLogin={signIn} />;
+  if (authLoading) return <main className="grid min-h-screen place-items-center bg-[#f1f5f1] text-sm text-[#718078]">Checking staff session…</main>;
+  if (!signedIn) return <LoginScreen onLogin={signIn} />;
 
   return (
     <div className="min-h-screen w-full bg-[#f1f4f1] font-sans text-[#26342d] antialiased">
@@ -4665,15 +5989,15 @@ function App() {
                   aria-label="Notifications"
                 >
                   <Bell size={18} />
-                  {unread > 0 && (
+                  {unread + unreadSystemNotifications.length + checkoutFollowUps.length + housekeepingPrepAlerts.length > 0 && (
                     <i className="absolute right-2 top-2 size-2 rounded-full bg-[#d9484f] ring-2 ring-white" />
                   )}
                 </button>
                 {notificationsOpen && (
-                  <div className="absolute right-0 top-12 z-40 w-72 rounded-xl border border-[#e2e9e4] bg-white p-3 shadow-xl">
+                  <div className="absolute right-0 top-12 z-40 max-h-[min(80vh,34rem)] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border border-[#e2e9e4] bg-white p-3 shadow-xl">
                     <div className="flex items-center justify-between px-1 pb-2">
                       <strong className="text-sm">Notifications</strong>
-                      <button
+                      {unread > 0 && <button
                         className="text-xs text-[#176b54]"
                         onClick={() => {
                           updateList("conversations", (items) =>
@@ -4682,10 +6006,51 @@ function App() {
                           setNotificationsOpen(false);
                         }}
                       >
-                        Mark read
-                      </button>
+                        Mark messages read
+                      </button>}
                     </div>
-                    {unread ? (
+                    {housekeepingPrepAlerts.map((booking) => {
+                      const guest = guestFor(data, booking.guestId);
+                      const unit = unitFor(data, booking.unitId);
+                      return (
+                        <div key={`housekeeping-${booking.id}`} className="mb-2 rounded-lg border border-[#d7e3d9] bg-[#f5f8f4] p-3">
+                          <p className="text-xs font-semibold uppercase text-[#526957]">Checkout today · Room {unit?.number || "—"}</p>
+                          <p className="mt-1 text-sm font-medium text-[#2e3e34]">{guest?.name || "Guest"} is due out by {data.settings.checkOutTime}.</p>
+                          <p className="mt-1 text-xs text-[#66776c]">Call housekeeping to tidy the room after checkout.</p>
+                          <button onClick={() => { navigate("housekeeping"); setNotificationsOpen(false); }} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#176b54]">
+                            <ClipboardList size={14} />Open housekeeping board
+                          </button>
+                        </div>
+                      );
+                    })}
+                    {checkoutFollowUps.map((booking) => {
+                      const guest = guestFor(data, booking.guestId);
+                      const unit = unitFor(data, booking.unitId);
+                      return (
+                        <div key={booking.id} className="mb-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                          <p className="text-xs font-semibold uppercase text-[#795e2b]">Checkout overdue · Room {unit?.number || "—"}</p>
+                          <p className="mt-1 text-sm font-medium text-[#3c3322]">{guest?.name || "Guest"} was due out by {data.settings.checkOutTime}.</p>
+                          <p className="mt-1 text-xs text-[#795e2b]">Ask whether they’re extending or checking out.</p>
+                          {guest?.phone ? (
+                            <a href={`tel:${guest.phone.replace(/[^+\d]/g, "")}`} className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#176b54]">
+                              <PhoneCall size={14} />Call {guest.phone}
+                            </a>
+                          ) : <p className="mt-2 text-xs text-[#795e2b]">No phone number on file</p>}
+                        </div>
+                      );
+                    })}
+                    {unreadSystemNotifications.map((notification) => (
+                      <div key={notification.id} className="mb-2 rounded-lg border border-rose-300 bg-rose-50 p-3">
+                        <p className="text-xs font-semibold uppercase text-rose-800">Stock alert</p>
+                        <p className="mt-1 text-sm font-semibold text-rose-950">{notification.title}</p>
+                        <p className="mt-1 text-xs text-rose-900">{notification.body}</p>
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <button onClick={() => { navigate("inventory"); setNotificationsOpen(false); }} className="text-xs font-semibold text-rose-900 underline">Open inventory</button>
+                          <button onClick={() => markNotificationRead(notification)} aria-label="Mark stock alert as read" className="text-xs font-medium text-rose-800">Mark read</button>
+                        </div>
+                      </div>
+                    ))}
+                    {unread > 0 && (
                       <button
                         onClick={() => {
                           navigate("messages");
@@ -4699,7 +6064,8 @@ function App() {
                         />
                         <span>{unread} unread guest messages</span>
                       </button>
-                    ) : (
+                    )}
+                    {!unread && !unreadSystemNotifications.length && !housekeepingPrepAlerts.length && !checkoutFollowUps.length && (
                       <p className="p-2 text-sm text-[#829087]">
                         You’re all caught up.
                       </p>
@@ -4716,19 +6082,7 @@ function App() {
                   <p className="text-xs font-semibold text-[#35443b]">
                     {currentUser.name}
                   </p>
-                  <label className="flex items-center gap-1 text-[10px] text-[#79867e]">
-                    Preview role
-                    <select
-                      aria-label="Preview role"
-                      value={role}
-                      onChange={(event) => setRole(event.target.value)}
-                      className="max-w-24 cursor-pointer bg-transparent font-medium text-[#176b54] outline-none"
-                    >
-                      <option value="worker">Worker</option>
-                      <option value="manager">Manager</option>
-                      <option value="ceo">CEO / Admin</option>
-                    </select>
-                  </label>
+                  <p className="text-[10px] capitalize text-[#79867e]">{role === "ceo" ? "CEO / Admin" : role}</p>
                 </div>
               </div>
               <button onClick={signOut} className="grid size-10 place-items-center rounded-lg border border-[#e6ece8] text-[#647269] hover:bg-[#f7f9f7]" aria-label="Sign out" title="Sign out"><LogOut size={17} /></button>
@@ -4765,7 +6119,20 @@ function App() {
           {toast}
         </div>
       )}
-      {modal?.type === "booking" ? (
+      {modal?.type === "fnbMenu" ? (
+        <MenuItemDialog data={data} onClose={() => setModal(null)} onSave={saveMenuItem} />
+      ) : modal?.type === "fnbOrder" ? (
+        <FnbOrderDialog data={data} fnbData={fnbData} onClose={() => setModal(null)} onSave={createFnbOrder} />
+      ) : modal?.type === "fnbRefund" ? (
+        <FnbRefundDialog order={modal.record} onClose={() => setModal(null)} onSave={refundFnbOrder} />
+      ) : modal?.type === "roomEditor" ? (
+        <RoomEditorDialog
+          key={modal.record.id}
+          room={modal.record}
+          onClose={() => setModal(null)}
+          onSave={saveRoom}
+        />
+      ) : modal?.type === "booking" ? (
         <BookingDialog
           key={modal.record?.id || "new-booking"}
           data={data}

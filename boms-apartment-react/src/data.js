@@ -634,7 +634,7 @@ export function createInitialData() {
       },
       {
         id: "USR-002",
-        name: "Emeka Okoro",
+        name: "Ewilliam Ndamiye",
         email: "emeka@bomsapartment.com",
         role: "manager",
         active: true,
@@ -656,9 +656,9 @@ export function createInitialData() {
     ],
     settings: {
       checkInTime: "14:00",
-      checkOutTime: "11:00",
-      servicePercent: 5,
-      vatPercent: 7.5,
+      checkOutTime: "12:00",
+      servicePercent: 0,
+      vatPercent: 0,
       cancellationHours: 48,
       currency: "NGN",
     },
@@ -674,6 +674,12 @@ export function nightsBetween(checkIn, checkOut) {
     (Date.parse(`${checkOut}T00:00:00Z`) - Date.parse(`${checkIn}T00:00:00Z`)) /
       86400000,
   );
+}
+
+export function defaultCheckoutDate(checkIn) {
+  return new Date(Date.parse(`${checkIn}T00:00:00Z`) + 86400000)
+    .toISOString()
+    .slice(0, 10);
 }
 
 export function calculateQuote(
@@ -750,6 +756,98 @@ export function formatDate(date) {
     year: "numeric",
     timeZone: "UTC",
   }).format(new Date(`${date}T00:00:00Z`));
+}
+
+export const appRoutes = {
+  dashboard: "/dashboard",
+  bookings: "/bookings",
+  guests: "/guests",
+  rooms: "/rooms",
+  calendar: "/calendar",
+  housekeeping: "/housekeeping",
+  restaurant: "/restaurant",
+  inventory: "/inventory",
+  purchasing: "/purchasing",
+  payments: "/payments",
+  financials: "/financials",
+  messages: "/messages",
+  concierge: "/concierge",
+  reviews: "/reviews",
+  team: "/team",
+  audit: "/audit",
+};
+
+export function buildRouteForPage(page = "dashboard") {
+  return appRoutes[page] || appRoutes.dashboard;
+}
+
+export function resolvePageFromRoute(route = "") {
+  const raw = String(route || "");
+  const value = raw.includes("#") ? raw.slice(raw.indexOf("#") + 1) : raw;
+  const cleaned = value.replace(/^\/+|\/+$/g, "");
+  if (!cleaned || cleaned === "login") return "dashboard";
+  const match = Object.entries(appRoutes).find(([, url]) => url === `/${cleaned}`);
+  return match ? match[0] : "dashboard";
+}
+
+export function buildDeskWorkerDashboardSummary(
+  data = {},
+  today = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Africa/Lagos",
+  }).format(new Date()),
+  now = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Lagos",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(new Date()),
+) {
+  const bookings = Array.isArray(data.bookings) ? data.bookings : [];
+  const units = Array.isArray(data.units) ? data.units : [];
+  const inventory = Array.isArray(data.inventory) ? data.inventory : [];
+  const guests = Array.isArray(data.guests) ? data.guests : [];
+
+  const guestById = new Map(guests.map((guest) => [guest.id, guest]));
+  const unitById = new Map(units.map((unit) => [unit.id, unit]));
+
+  const arrivalsToday = bookings.filter(
+    (booking) => booking.checkIn === today && booking.status === "confirmed",
+  );
+  const roomsBooked = bookings.filter((booking) =>
+    ["hold", "confirmed", "checked_in"].includes(booking.status),
+  ).length;
+  const departuresToday = bookings.filter(
+    (booking) => booking.checkOut === today && booking.status === "checked_in",
+  );
+  const lowStockItems = inventory.filter(
+    (item) => item.databaseItem && Number(item.quantity) <= Number(item.minimum),
+  );
+  const readyRooms = units.filter((unit) =>
+    ["available", "inspected"].includes(unit.status),
+  ).length;
+
+  const arrivalQueue = arrivalsToday.map((booking) => ({
+    id: booking.id,
+    guestName: guestById.get(booking.guestId)?.name || "Guest",
+    roomNumber: unitById.get(booking.unitId)?.number || "—",
+  }));
+  const departureQueue = departuresToday.map((booking) => ({
+    id: booking.id,
+    guestName: guestById.get(booking.guestId)?.name || "Guest",
+    roomNumber: unitById.get(booking.unitId)?.number || "—",
+    isLate: now > (data.settings?.checkOutTime || "12:00"),
+  }));
+
+  return {
+    roomsBooked,
+    arrivalsToday: arrivalQueue.length,
+    departuresToday: departureQueue.length,
+    readyRooms,
+    lowStockItems: lowStockItems.length,
+    priorityActions: departureQueue.length,
+    arrivalQueue,
+    departureQueue,
+  };
 }
 
 export function makeCode(prefix, records) {
