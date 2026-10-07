@@ -132,6 +132,7 @@ const navGroups = [
     items: [
       ["payments", "Payments & invoices", CreditCard],
       ["financials", "Financials", Wallet],
+      ["weeklyReport", "Weekly accounting", FileText],
     ],
   },
   {
@@ -3263,6 +3264,154 @@ function PaymentsPage({ data, role, search, onSearch, onCreate, onIssue, onPrint
   );
 }
 
+function getWeekWindowForLagos(referenceDate = new Date()) {
+  const dateText = new Intl.DateTimeFormat("sv-SE", { timeZone: "Africa/Lagos" }).format(referenceDate);
+  const asUtc = new Date(`${dateText}T12:00:00Z`);
+  const dayIndex = (asUtc.getUTCDay() + 6) % 7;
+  const currentWeekStart = new Date(asUtc);
+  currentWeekStart.setUTCDate(asUtc.getUTCDate() - dayIndex);
+  currentWeekStart.setUTCHours(0, 0, 0, 0);
+  const previousWeekStart = new Date(currentWeekStart);
+  previousWeekStart.setUTCDate(currentWeekStart.getUTCDate() - 7);
+  const previousWeekEnd = new Date(previousWeekStart);
+  previousWeekEnd.setUTCDate(previousWeekStart.getUTCDate() + 7);
+  return {
+    startDate: new Intl.DateTimeFormat("sv-SE", { timeZone: "Africa/Lagos" }).format(previousWeekStart),
+    endDate: new Intl.DateTimeFormat("sv-SE", { timeZone: "Africa/Lagos" }).format(previousWeekEnd),
+  };
+}
+
+function WeeklyAccountingPage({ data, fnbData, role }) {
+  const week = getWeekWindowForLagos();
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [paymentFilter, setPaymentFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const allOrders = Array.isArray(fnbData.orders) ? fnbData.orders : [];
+  const filteredOrders = allOrders.filter((order) => {
+    const inRange = Boolean(order.createdAt && order.createdAt >= week.startDate && order.createdAt < week.endDate);
+    const matchesSource = sourceFilter === "all" || order.source === sourceFilter;
+    const matchesPayment = paymentFilter === "all" || order.paymentMethod === paymentFilter;
+    const matchesStatus = statusFilter === "all" || order.status === statusFilter;
+    const matchesCategory = categoryFilter === "all" || (Array.isArray(order.items) && order.items.some((item) => item.category === categoryFilter || item.name === categoryFilter));
+    return inRange && matchesSource && matchesPayment && matchesStatus && matchesCategory;
+  });
+  const roomBookings = (data.bookings || []).filter((booking) => {
+    const start = booking.checkIn || booking.check_in;
+    const end = booking.checkOut || booking.check_out;
+    return Boolean(start && end && start < week.endDate && end > week.startDate && booking.databaseBooking !== false);
+  });
+  const roomNightsSold = roomBookings.reduce((sum, booking) => sum + Math.max(1, Number(booking.nights || 0)), 0);
+  const grossSales = filteredOrders.filter((order) => order.status !== "cancelled").reduce((sum, order) => sum + Number(order.totalKobo || 0), 0);
+  const directSales = filteredOrders.filter((order) => order.paymentMethod !== "room_charge" && order.status !== "cancelled").reduce((sum, order) => sum + Number(order.totalKobo || 0), 0);
+  const roomCharges = filteredOrders.filter((order) => order.paymentMethod === "room_charge" && order.status !== "cancelled").reduce((sum, order) => sum + Number(order.totalKobo || 0), 0);
+  const expenses = (data.expenses || []).filter((expense) => expense.status === "approved" && expense.date >= week.startDate && expense.date < week.endDate).reduce((sum, expense) => sum + Number(expense.amountKobo || 0), 0);
+  const stockValue = (data.inventory || []).reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.costKobo || 0), 0);
+  const refunds = (fnbData.payments || []).filter((payment) => payment.status === "refunded" && payment.createdAt >= week.startDate && payment.createdAt < week.endDate).reduce((sum, payment) => sum + Math.abs(Number(payment.amountKobo || 0)), 0);
+  const sourceOptions = ["all", ...new Set((fnbData.orders || []).map((order) => order.source).filter(Boolean))];
+  const paymentOptions = ["all", ...new Set((fnbData.orders || []).map((order) => order.paymentMethod).filter(Boolean))];
+  const categoryOptions = ["all", ...new Set((fnbData.menuItems || []).map((item) => item.category).filter(Boolean))];
+  const statusOptions = ["all", ...new Set((fnbData.orders || []).map((order) => order.status).filter(Boolean))];
+  const reportRows = [
+    ["Weekly accounting", `${week.startDate} to ${week.endDate}`],
+    ["Timezone", "Africa/Lagos"],
+    [],
+    ["Reconciliation", "Amount (kobo)"],
+    ["Room charges", roomCharges],
+    ["F&B gross sales", grossSales],
+    ["Direct payments", directSales],
+    ["Approved expenses", expenses],
+    ["Refunds", refunds],
+    ["Inventory value", stockValue],
+    ["Operating result", roomCharges + grossSales - expenses - refunds],
+    [],
+    ["F&B order detail", "Order", "Date", "Source", "Payment", "Status", "Subtotal (kobo)", "Discount (kobo)", "Total (kobo)"],
+    ...filteredOrders.map((order) => [
+      order.orderNumber || order.id,
+      order.guestName || "",
+      order.createdAt || "",
+      order.source || "",
+      order.paymentMethod || "",
+      order.status || "",
+      Number(order.subtotalKobo || 0),
+      Number(order.discountKobo || 0),
+      Number(order.totalKobo || 0),
+    ]),
+  ];
+  function downloadCsv() {
+    const csv = reportRows.map((row) => row.map((value) => {
+      const text = String(value ?? "");
+      const safeText = typeof value === "string" && /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+      return `"${safeText.replaceAll('"', '""')}"`;
+    }).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `boms-weekly-accounting-${week.startDate}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+  function printReport() {
+    const printWindow = window.open("", "_blank", "width=900,height=900");
+    if (!printWindow) return;
+    const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    })[character]);
+    const summaryRows = reportRows.slice(4, 11).map(([label, amount]) => `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(formatMoney(amount))}</td></tr>`).join("");
+    const orderRows = filteredOrders.map((order) => `<tr><td>${escapeHtml(order.orderNumber || order.id)}</td><td>${escapeHtml(order.createdAt || "")}</td><td>${escapeHtml(order.source || "")}</td><td>${escapeHtml(order.paymentMethod || "")}</td><td>${escapeHtml(order.status || "")}</td><td>${escapeHtml(formatMoney(order.totalKobo || 0))}</td></tr>`).join("");
+    printWindow.document.write(`<title>Weekly accounting ${escapeHtml(week.startDate)}</title><style>body{font:13px Arial,sans-serif;color:#23312b;margin:32px}h1{font-size:22px}p{color:#586c63}table{width:100%;border-collapse:collapse;margin:20px 0}th,td{text-align:left;border-bottom:1px solid #dfe7e3;padding:8px}th{background:#f3f7f4}@media print{body{margin:12mm}}</style><h1>Boms Apartment · Weekly accounting</h1><p>Africa/Lagos · ${escapeHtml(week.startDate)} to ${escapeHtml(week.endDate)}</p><h2>Reconciliation</h2><table><tbody>${summaryRows}</tbody></table><h2>F&B order detail</h2><table><thead><tr><th>Order</th><th>Date</th><th>Source</th><th>Payment</th><th>Status</th><th>Total</th></tr></thead><tbody>${orderRows || '<tr><td colspan="6">No orders in this report.</td></tr>'}</tbody></table>`);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+  }
+
+  return (
+    <>
+      <PageHeader
+        title="Weekly accounting"
+        description={`Lagos week • ${week.startDate} to ${week.endDate}`}
+        action={<div className="flex items-center gap-2"><Status value={role === "worker" ? "manager only" : "finalised"} /><Button variant="secondary" onClick={downloadCsv} aria-label="Export weekly report as CSV"><Download size={16} />CSV</Button><Button variant="secondary" onClick={printReport} aria-label="Print weekly accounting report"><Printer size={16} />Print</Button></div>}
+      />
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Room nights sold" value={String(roomNightsSold)} note="Vacant rooms excluded" icon={BedDouble} />
+        <StatCard label="Gross F&B sales" value={formatMoney(grossSales)} note="Orders posted within the week" icon={Utensils} />
+        <StatCard label="Direct payments" value={formatMoney(directSales)} note="Cash, card, and transfer receipts" icon={Wallet} />
+        <StatCard label="Approved expenses" value={formatMoney(expenses)} note="Operating spend for the period" icon={TrendingUp} />
+      </div>
+      <Panel className="mt-4 p-5">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <label className="text-xs font-medium text-[#5a6a62]">Source<select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} className="mt-1 w-full rounded-lg border border-[#dfe7e3] bg-white px-2.5 py-2 text-sm text-[#23312b]"><option value="all">All sources</option>{sourceOptions.filter((value) => value !== "all").map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+          <label className="text-xs font-medium text-[#5a6a62]">Payment<select value={paymentFilter} onChange={(event) => setPaymentFilter(event.target.value)} className="mt-1 w-full rounded-lg border border-[#dfe7e3] bg-white px-2.5 py-2 text-sm text-[#23312b]"><option value="all">All methods</option>{paymentOptions.filter((value) => value !== "all").map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+          <label className="text-xs font-medium text-[#5a6a62]">Category<select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="mt-1 w-full rounded-lg border border-[#dfe7e3] bg-white px-2.5 py-2 text-sm text-[#23312b]"><option value="all">All categories</option>{categoryOptions.filter((value) => value !== "all").map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+          <label className="text-xs font-medium text-[#5a6a62]">Status<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="mt-1 w-full rounded-lg border border-[#dfe7e3] bg-white px-2.5 py-2 text-sm text-[#23312b]"><option value="all">All statuses</option>{statusOptions.filter((value) => value !== "all").map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        </div>
+      </Panel>
+      <div className="mt-4 grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+        <Panel className="p-5">
+          <h2 className="font-semibold text-[#23312b]">Reconciliation snapshot</h2>
+          <div className="mt-4 space-y-3 text-sm text-[#586c63]">
+            <div className="flex items-center justify-between"><span>Sales earned</span><strong className="text-[#1d332d]">{formatMoney(roomCharges + grossSales)}</strong></div>
+            <div className="flex items-center justify-between"><span>Cash received</span><strong className="text-[#1d332d]">{formatMoney(directSales)}</strong></div>
+            <div className="flex items-center justify-between"><span>Room folio charges</span><strong className="text-[#1d332d]">{formatMoney(roomCharges)}</strong></div>
+            <div className="flex items-center justify-between"><span>Refunds</span><strong className="text-[#1d332d]">{formatMoney(refunds)}</strong></div>
+            <div className="flex items-center justify-between"><span>Inventory value</span><strong className="text-[#1d332d]">{formatMoney(stockValue)}</strong></div>
+            <div className="flex items-center justify-between border-t border-[#e5ece8] pt-3"><span>Operating result</span><strong className="text-[#1d332d]">{formatMoney(roomCharges + grossSales - expenses - refunds)}</strong></div>
+          </div>
+        </Panel>
+        <Panel className="p-5">
+          <h2 className="font-semibold text-[#23312b]">Activity highlight</h2>
+          <ul className="mt-4 space-y-3 text-sm text-[#5f6d66]">
+            <li className="flex items-center justify-between"><span>Orders in range</span><strong>{filteredOrders.length}</strong></li>
+            <li className="flex items-center justify-between"><span>Items sold</span><strong>{filteredOrders.reduce((sum, order) => sum + Number(order.items?.reduce((inner, item) => inner + Number(item.quantity || 0), 0) || 0), 0)}</strong></li>
+            <li className="flex items-center justify-between"><span>Low stock items</span><strong>{(data.inventory || []).filter((item) => Number(item.quantity) <= Number(item.minimum)).length}</strong></li>
+            <li className="flex items-center justify-between"><span>Pending adjustments</span><strong>{0}</strong></li>
+          </ul>
+        </Panel>
+      </div>
+    </>
+  );
+}
+
 function FinancialsPage({ data, fnbData, role, onCreate, onExpenseAction }) {
   const transactions = [
     ...data.payments.filter((payment) => payment.databasePayment).map((payment) => ({
@@ -3987,7 +4136,7 @@ function AuditPage({ data }) {
     <>
       <PageHeader
         title="Audit log"
-        description="Local demo history of key record changes. Production logs must be append-only and written by the server."
+        description="Append-only server history of record changes, adjustments, approvals, cancellations, and refunds."
       />
       <Panel>
         <DataTable
@@ -4002,7 +4151,7 @@ function AuditPage({ data }) {
                   timeZone: "Africa/Lagos",
                 }).format(new Date(entry.at)),
             },
-            { key: "user", label: "Role" },
+            { key: "user", label: "Actor" },
             { key: "entity", label: "Record type" },
             { key: "entityId", label: "Record ID" },
             { key: "action", label: "Action" },
@@ -4247,9 +4396,11 @@ function App() {
     setToast(message);
   }
   async function writeApi(path, method, body) {
+    const headers = body === undefined ? {} : { "Content-Type": "application/json" };
+    if (["POST", "PATCH"].includes(method.toUpperCase())) headers["Idempotency-Key"] = crypto.randomUUID();
     const response = await fetch(path, {
       method,
-      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      headers,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const result = await response.json().catch(() => ({}));
@@ -5726,7 +5877,8 @@ function App() {
       ...group,
       items: group.items
         .filter(([key]) => key !== "audit" || role === "ceo")
-        .filter(([key]) => key !== "financials" || role !== "worker"),
+        .filter(([key]) => key !== "financials" || role !== "worker")
+        .filter(([key]) => key !== "weeklyReport" || role !== "worker"),
     }))
     .filter((group) => group.items.length);
   const primaryNavKeys = new Set(["dashboard", "bookings", "rooms", "calendar", "housekeeping", "restaurant"]);
@@ -6016,6 +6168,20 @@ function App() {
               notify(`Expense ${status}.`);
             }}
           />
+        );
+      break;
+    case "weeklyReport":
+      content =
+        role === "worker" ? (
+          <Panel>
+            <EmptyPanel
+              icon={ShieldCheck}
+              title="Weekly accounting access restricted"
+              detail="Only managers and CEOs can view the weekly account report."
+            />
+          </Panel>
+        ) : (
+          <WeeklyAccountingPage data={data} fnbData={fnbData} role={role} />
         );
       break;
     case "messages":

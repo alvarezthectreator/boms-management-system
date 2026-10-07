@@ -845,6 +845,7 @@ export const appRoutes = {
   purchasing: "/purchasing",
   payments: "/payments",
   financials: "/financials",
+  weeklyReport: "/weekly-report",
   messages: "/messages",
   concierge: "/concierge",
   reviews: "/reviews",

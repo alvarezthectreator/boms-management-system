@@ -13,6 +13,11 @@ export function createTestDatabase() {
       id TEXT PRIMARY KEY, property_id TEXT, user_id TEXT, token_hash TEXT UNIQUE,
       created_at TEXT, expires_at TEXT
     );
+    CREATE TABLE api_idempotency_keys (
+      property_id TEXT, user_id TEXT, scope TEXT, idempotency_key TEXT,
+      request_hash TEXT, response_json TEXT, created_at TEXT,
+      PRIMARY KEY (property_id, user_id, scope, idempotency_key)
+    );
     CREATE TABLE notifications (
       id TEXT PRIMARY KEY, property_id TEXT, user_id TEXT, type TEXT, title TEXT,
       body TEXT, read_at TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT
@@ -21,6 +26,16 @@ export function createTestDatabase() {
       id TEXT PRIMARY KEY, property_id TEXT, user_id TEXT, entity TEXT, entity_id TEXT,
       action TEXT, old_json TEXT, new_json TEXT, created_at TEXT
     );
+    CREATE TRIGGER audit_logs_reject_update
+    BEFORE UPDATE ON audit_logs
+    BEGIN
+      SELECT RAISE(ABORT, 'audit log records are append-only');
+    END;
+    CREATE TRIGGER audit_logs_reject_delete
+    BEFORE DELETE ON audit_logs
+    BEGIN
+      SELECT RAISE(ABORT, 'audit log records are append-only');
+    END;
     CREATE TABLE housekeeping_tasks (id TEXT PRIMARY KEY, assigned_to_label TEXT);
     CREATE TABLE property_settings (
       property_id TEXT, key TEXT, value_json TEXT, updated_at TEXT, updated_by TEXT,
@@ -102,7 +117,9 @@ export function createTestDatabase() {
     );
     CREATE TABLE minibar_movements (
       id TEXT PRIMARY KEY, property_id TEXT, unit_id TEXT, booking_id TEXT, item_id TEXT,
-      qty REAL, unit_price_kobo INTEGER, movement_type TEXT, reason TEXT, created_at TEXT
+      booking_extra_id TEXT,
+      qty REAL, unit_price_kobo INTEGER, movement_type TEXT, reason TEXT, created_at TEXT,
+      updated_at TEXT
     );
     CREATE TABLE conversations (
       id TEXT PRIMARY KEY, property_id TEXT, guest_id TEXT, booking_id TEXT,
@@ -140,6 +157,7 @@ export function createRouteApp() {
   return {
     ...app,
     call(method, path, { body = {}, headers = {} } = {}) {
+      const [resourcePath, queryString = ""] = path.split("?");
       const route = routes.find((candidate) => {
         if (candidate.method !== method.toUpperCase()) return false;
         const names = [];
@@ -147,7 +165,7 @@ export function createRouteApp() {
           names.push(token.slice(1));
           return "([^/]+)";
         });
-          return new RegExp(`^${pattern}$`).test(path);
+        return new RegExp(`^${pattern}$`).test(resourcePath);
       });
       if (!route) throw new Error(`Route not registered: ${method} ${path}`);
       const names = [];
@@ -155,7 +173,8 @@ export function createRouteApp() {
         names.push(token.slice(1));
         return "([^/]+)";
       });
-      const match = path.match(new RegExp(`^${pattern}$`));
+      const match = resourcePath.match(new RegExp(`^${pattern}$`));
+      const query = Object.fromEntries(new URLSearchParams(queryString).entries());
       const response = {
         code: 200,
         body: undefined,
@@ -167,7 +186,8 @@ export function createRouteApp() {
       };
       route.handler({
         body,
-        path,
+        path: resourcePath,
+        query,
         ip: "test",
         secure: false,
         user: {

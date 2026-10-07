@@ -27,6 +27,8 @@ if (!database.pragma("table_info(purchase_order_lines)").some((column) => column
   database.exec(fs.readFileSync(path.join(root, "db", "007_purchase_expiry.sql"), "utf8"));
 }
 database.exec(fs.readFileSync(path.join(root, "db", "008_auth_sessions.sql"), "utf8"));
+database.exec(fs.readFileSync(path.join(root, "db", "009_idempotency.sql"), "utf8"));
+database.exec(fs.readFileSync(path.join(root, "db", "010_audit_append_only.sql"), "utf8"));
 
 const app = express();
 const port = Number(process.env.API_PORT || 3001);
@@ -138,6 +140,14 @@ function sendError(response, error) {
   response.status(error.status || 500).json({ error: error.message || "Request failed." });
 }
 
+function writeAudit(request, entity, entityId, action, before, after) {
+  database.prepare(`
+    INSERT INTO audit_logs (id, property_id, user_id, entity, entity_id, action, old_json, new_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).run(`AUD-${crypto.randomUUID()}`, propertyId, request.user?.id || null, entity, entityId, action,
+    before == null ? null : JSON.stringify(before), after == null ? null : JSON.stringify(after));
+}
+
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true });
 });
@@ -153,6 +163,7 @@ app.patch("/api/rooms/:id", (request, response) => {
     }
     const room = getRoom(request.params.id);
     if (!room) return response.status(404).json({ error: "Room not found." });
+    const before = listRooms().find((item) => item.id === room.id);
     const imageUrl = parseImage(request.body, room.id);
     const rateNaira = request.body.rateNaira;
     const bedType = request.body.sharedBedType;
@@ -179,7 +190,9 @@ app.patch("/api/rooms/:id", (request, response) => {
       }
     });
     update();
-    response.json(listRooms().find((item) => item.id === room.id));
+    const updated = listRooms().find((item) => item.id === room.id);
+    writeAudit(request, "room", room.id, "updated", before, updated);
+    response.json(updated);
   } catch (error) {
     sendError(response, error);
   }
@@ -192,12 +205,16 @@ app.patch("/api/rooms/:id/status", (request, response) => {
   const statuses = ["available", "occupied", "dirty", "cleaning", "inspected", "out_of_order"];
   const { status } = request.body;
   if (!statuses.includes(status)) return response.status(400).json({ error: "Invalid room status." });
+  const before = listRooms().find((room) => room.id === request.params.id);
   const update = database.prepare(`
     UPDATE units SET status = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND property_id = ? AND deleted_at IS NULL
   `).run(status, request.params.id, propertyId);
   if (!update.changes) return response.status(404).json({ error: "Room not found." });
   response.json(listRooms().find((room) => room.id === request.params.id));
+  const updated = listRooms().find((room) => room.id === request.params.id);
+  writeAudit(request, "room", request.params.id, "status_changed", before, updated);
+  response.json(updated);
 });
 
 app.get("/api/blocks", (_request, response) => {
@@ -224,6 +241,7 @@ app.post("/api/rooms/:id/blocks", (request, response) => {
   const room = getRoom(request.params.id);
   const { start, end, reason } = request.body;
   if (!room) return response.status(404).json({ error: "Room not found." });
+  writeAudit(request, "room_block", block.id, "created", null, block);
   if (!start || !end || end <= start || !String(reason || "").trim()) {
     return response.status(400).json({ error: "Enter a valid date range and reason." });
   }
@@ -368,10 +386,12 @@ app.patch("/api/reservations/:id/status", (request, response) => {
       `).run(status, status === "cancelled" ? String(reason).trim() : null,
         status, status, request.params.id, propertyId);
       if (status === "checked_in" || status === "checked_out") {
+        const roomBefore = room;
         database.prepare(`
           UPDATE units SET status = ?, updated_at = CURRENT_TIMESTAMP
           WHERE id = ? AND property_id = ? AND deleted_at IS NULL
         `).run(status === "checked_in" ? "occupied" : "dirty", booking.unit_id, propertyId);
+        writeAudit(request, "room", booking.unit_id, "status_changed", roomBefore, getRoom(booking.unit_id));
       }
       let housekeepingTask = null;
       if (status === "checked_out" && booking.status !== "checked_out") {
@@ -423,12 +443,11 @@ app.patch("/api/reservations/:id/status", (request, response) => {
         if (invoice) database.prepare("UPDATE invoices SET paid_kobo = ?, status = 'issued', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
           .run(Math.max(0, invoice.paid_kobo - requestedRefund), invoice.id);
         for (const refund of refunds) {
-          database.prepare(`
-            INSERT INTO audit_logs (id, property_id, entity, entity_id, action, new_json, created_at)
-            VALUES (?, ?, 'payment', ?, 'cancel_refund', ?, CURRENT_TIMESTAMP)
-          `).run(`AUD-${crypto.randomUUID()}`, propertyId, refund.id, JSON.stringify(refund));
+          writeAudit(request, "payment", refund.id, "cancel_refund", null, refund);
         }
       }
+      const updatedBooking = database.prepare("SELECT * FROM bookings WHERE id = ? AND property_id = ?").get(request.params.id, propertyId);
+      writeAudit(request, "reservation", request.params.id, status, booking, updatedBooking);
       return {
         id: request.params.id,
         status,
@@ -495,9 +514,12 @@ function validateReservation(input, existingId = null) {
   };
 }
 
-function saveReservation(input, existingId = null) {
+function saveReservation(input, request, existingId = null) {
   const reservationId = existingId || `BA-B${Date.now()}-${crypto.randomBytes(2).toString("hex")}`;
   const run = database.transaction(() => {
+    const before = existingId
+      ? database.prepare("SELECT * FROM bookings WHERE id = ? AND property_id = ? AND deleted_at IS NULL").get(existingId, propertyId)
+      : null;
     const quote = validateReservation(input, existingId);
     const guest = input.guest;
     if (!guest?.name || !guest?.phone) throw Object.assign(new Error("Guest name and phone are required."), { status: 400 });
@@ -549,6 +571,8 @@ function saveReservation(input, existingId = null) {
       `).run(`INV-${crypto.randomUUID()}`, propertyId, reservationId,
         `BA-INV-${reservationId}`, input.checkIn, input.checkIn, quote.totalKobo);
     }
+    const saved = database.prepare("SELECT * FROM bookings WHERE id = ? AND property_id = ?").get(reservationId, propertyId);
+    writeAudit(request, "reservation", reservationId, existingId ? "updated" : "created", before, saved);
     return reservationId;
   });
   return run.immediate();
@@ -556,7 +580,7 @@ function saveReservation(input, existingId = null) {
 
 app.post("/api/reservations", (request, response) => {
   try {
-    const id = saveReservation(request.body);
+    const id = saveReservation(request.body, request);
     response.status(201).json({ id });
   } catch (error) {
     sendError(response, error);
@@ -568,7 +592,7 @@ app.put("/api/reservations/:id", (request, response) => {
     return response.status(403).json({ error: "Only a manager or admin can edit reservations." });
   }
   try {
-    const id = saveReservation(request.body, request.params.id);
+    const id = saveReservation(request.body, request, request.params.id);
     response.json({ id });
   } catch (error) {
     sendError(response, error);

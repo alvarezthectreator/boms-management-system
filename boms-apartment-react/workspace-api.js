@@ -36,7 +36,7 @@ function audit(database, propertyId, request, entity, entityId, action, before, 
     before == null ? null : JSON.stringify(before), after == null ? null : JSON.stringify(after));
 }
 
-function readWorkspace(database, propertyId) {
+function readWorkspace(database, propertyId, includeAuditLogs = false) {
   const users = database.prepare(`
     SELECT id, name, email, role, active FROM users
     WHERE property_id = ? AND deleted_at IS NULL ORDER BY name
@@ -118,7 +118,7 @@ function readWorkspace(database, propertyId) {
     closedAt: closing.closed_at,
     databaseClosing: true,
   }));
-  const auditLogs = database.prepare(`
+  const auditLogs = includeAuditLogs ? database.prepare(`
     SELECT audit_logs.*, users.name AS user_name, users.role AS user_role
     FROM audit_logs LEFT JOIN users ON users.id = audit_logs.user_id
     WHERE audit_logs.property_id = ? ORDER BY audit_logs.created_at DESC LIMIT 500
@@ -131,7 +131,7 @@ function readWorkspace(database, propertyId) {
     newValue: parseJson(entry.new_json),
     user: entry.user_name || entry.user_role || "System",
     at: entry.created_at,
-  }));
+  })) : [];
   return { users, conversations, reviews, requests, settings, dailyClosings, auditLogs };
 }
 
@@ -225,7 +225,7 @@ export function registerWorkspaceRoutes(app, database, propertyId) {
     }
   });
 
-  app.get("/api/workspace", (_request, response) => response.json(readWorkspace(database, propertyId)));
+  app.get("/api/workspace", (request, response) => response.json(readWorkspace(database, propertyId, request.user?.role === "ceo")));
 
   app.post("/api/conversations/:id/messages", (request, response) => {
     if (!requireRole(request, response, ["worker", ...managerRoles])) return;

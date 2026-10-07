@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { syncLowStockNotifications } from "./inventory-alerts.js";
+import { readIdempotency, saveIdempotency } from "./idempotency.js";
 
 const managementRoles = ["manager", "ceo"];
 
@@ -19,15 +20,33 @@ function requireRole(request, response, roles) {
   return true;
 }
 
-function audit(database, propertyId, entity, entityId, action, before, after) {
+function audit(database, propertyId, entity, entityId, action, before, after, userId = null) {
   database.prepare(`
-    INSERT INTO audit_logs (id, property_id, entity, entity_id, action, old_json, new_json, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-  `).run(`AUD-${crypto.randomUUID()}`, propertyId, entity, entityId, action,
+    INSERT INTO audit_logs (id, property_id, user_id, entity, entity_id, action, old_json, new_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).run(`AUD-${crypto.randomUUID()}`, propertyId, userId, entity, entityId, action,
     before == null ? null : JSON.stringify(before), after == null ? null : JSON.stringify(after));
 }
 
-function mapMenuItem(item, recipeLines, modifiers) {
+function menuItemHasSufficientStock(database, propertyId, itemId) {
+  const required = database.prepare(`
+    SELECT recipe.inventory_item_id, SUM(recipe.qty) AS needed_qty, inventory_items.qty AS on_hand
+    FROM menu_recipe_lines AS recipe
+    JOIN inventory_items ON inventory_items.id = recipe.inventory_item_id
+    WHERE recipe.property_id = ? AND recipe.menu_item_id = ? AND recipe.deleted_at IS NULL
+      AND recipe.modifier_id IS NULL
+    GROUP BY recipe.inventory_item_id, inventory_items.qty
+  `).all(propertyId, itemId);
+
+  if (!required.length) return false;
+  return required.every((line) => Number(line.on_hand || 0) >= Number(line.needed_qty || 0));
+}
+
+function mapMenuItem(item, recipeLines, modifiers, database, propertyId) {
+  const baseRecipe = recipeLines.filter((line) => !line.modifier_id && line.menu_item_id === item.id);
+  const hasRecipe = baseRecipe.length > 0;
+  const manualAvailable = Boolean(item.available);
+  const stockAvailable = hasRecipe ? menuItemHasSufficientStock(database, propertyId, item.id) : false;
   return {
     id: item.id,
     categoryId: item.category_id,
@@ -36,8 +55,8 @@ function mapMenuItem(item, recipeLines, modifiers) {
     description: item.description || "",
     priceKobo: item.price_kobo,
     station: item.station,
-    available: Boolean(item.available),
-    recipe: recipeLines.filter((line) => !line.modifier_id && line.menu_item_id === item.id).map((line) => ({
+    available: manualAvailable && stockAvailable,
+    recipe: baseRecipe.map((line) => ({
       id: line.inventory_item_id,
       name: line.inventory_name,
       quantity: line.qty,
@@ -82,7 +101,7 @@ function readFnb(database, propertyId) {
     WHERE menu_items.property_id = ? AND menu_items.deleted_at IS NULL
       AND menu_categories.active = 1
     ORDER BY menu_categories.name, menu_items.name
-  `).all(propertyId).map((item) => mapMenuItem(item, recipeLines, modifiers));
+  `).all(propertyId).map((item) => mapMenuItem(item, recipeLines, modifiers, database, propertyId));
   const orders = database.prepare(`
     SELECT * FROM fnb_orders WHERE property_id = ? AND deleted_at IS NULL
     ORDER BY created_at DESC LIMIT 200
@@ -243,7 +262,7 @@ export function registerFnbRoutes(app, database, propertyId) {
         }
         database.prepare("INSERT INTO menu_items (id, property_id, category_id, name, description, price_kobo, station, available, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
           .run(itemId, propertyId, categoryRow.id, name.trim(), request.body.description || null, priceKobo, station);
-        const insertRecipe = database.prepare("INSERT INTO menu_recipe_lines (id, property_id, menu_item_id, inventory_item_id, modifier_id, qty, unit, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)");
+        const insertRecipe = database.prepare("INSERT INTO menu_recipe_lines (id, property_id, menu_item_id, inventory_item_id, modifier_id, qty, unit) VALUES (?, ?, ?, ?, ?, ?, ?)");
         for (const line of recipe) {
           const quantity = Number(line.quantity);
           const stock = database.prepare("SELECT id, unit FROM inventory_items WHERE id = ? AND property_id = ? AND deleted_at IS NULL").get(line.inventoryItemId, propertyId);
@@ -264,7 +283,7 @@ export function registerFnbRoutes(app, database, propertyId) {
           }
         }
         const saved = readFnb(database, propertyId).menuItems.find((item) => item.id === itemId);
-        audit(database, propertyId, "menu_item", itemId, "created", null, saved);
+        audit(database, propertyId, "menu_item", itemId, "created", null, saved, request.user?.id);
         return saved;
       });
       response.status(201).json(transaction.immediate());
@@ -273,13 +292,66 @@ export function registerFnbRoutes(app, database, propertyId) {
     }
   });
 
+  app.patch("/api/fnb/menu-items/:id", (request, response) => {
+    if (!requireRole(request, response, managementRoles)) return;
+    try {
+      const transaction = database.transaction(() => {
+        const item = database.prepare("SELECT menu_items.*, menu_categories.name AS category_name FROM menu_items JOIN menu_categories ON menu_categories.id = menu_items.category_id WHERE menu_items.id = ? AND menu_items.property_id = ? AND menu_items.deleted_at IS NULL AND menu_categories.active = 1").get(request.params.id, propertyId);
+        if (!item) throw problem("Menu item not found.", 404);
+        const name = typeof request.body.name === "string" ? request.body.name.trim() : item.name;
+        const category = typeof request.body.category === "string" ? request.body.category.trim() : item.category_name;
+        const station = ["kitchen", "bar"].includes(request.body.station) ? request.body.station : item.station;
+        const description = typeof request.body.description === "string" ? request.body.description : item.description || "";
+        const priceKobo = Number.isFinite(Number(request.body.priceKobo)) ? Math.round(Number(request.body.priceKobo)) : item.price_kobo;
+        const recipe = Array.isArray(request.body.recipe) ? request.body.recipe : null;
+        if (!name || !category || !["kitchen", "bar"].includes(station) || !Number.isSafeInteger(priceKobo) || priceKobo < 0) {
+          throw problem("Menu name, category, station, and price are required.", 400);
+        }
+        if (recipe && !recipe.length) throw problem("At least one recipe ingredient is required.", 400);
+
+        let categoryRow = database.prepare("SELECT * FROM menu_categories WHERE property_id = ? AND lower(name) = lower(?)").get(propertyId, category);
+        if (!categoryRow) {
+          categoryRow = { id: `CAT-${crypto.randomUUID()}` };
+          database.prepare("INSERT INTO menu_categories (id, property_id, name, station, created_at, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+            .run(categoryRow.id, propertyId, category, station);
+        }
+        database.prepare("UPDATE menu_items SET name = ?, description = ?, price_kobo = ?, station = ?, category_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?")
+          .run(name, description || null, priceKobo, station, categoryRow.id, request.params.id, propertyId);
+        if (recipe) {
+          database.prepare("UPDATE menu_recipe_lines SET deleted_at = CURRENT_TIMESTAMP WHERE menu_item_id = ? AND property_id = ? AND deleted_at IS NULL").run(request.params.id, propertyId);
+          const insertRecipe = database.prepare("INSERT INTO menu_recipe_lines (id, property_id, menu_item_id, inventory_item_id, modifier_id, qty, unit) VALUES (?, ?, ?, ?, ?, ?, ?)");
+          for (const line of recipe) {
+            const quantity = Number(line.quantity);
+            const stock = database.prepare("SELECT id, unit FROM inventory_items WHERE id = ? AND property_id = ? AND deleted_at IS NULL").get(line.inventoryItemId, propertyId);
+            if (!stock || !Number.isFinite(quantity) || quantity <= 0) throw problem("Choose valid stock items and recipe quantities.", 400);
+            insertRecipe.run(`RECIPE-${crypto.randomUUID()}`, propertyId, request.params.id, stock.id, null, quantity, stock.unit);
+          }
+        }
+        const saved = readFnb(database, propertyId).menuItems.find((menuItem) => menuItem.id === request.params.id);
+        const currentAvailable = saved?.available ?? false;
+        database.prepare("UPDATE menu_items SET available = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?")
+          .run(currentAvailable ? 1 : 0, request.params.id, propertyId);
+        audit(database, propertyId, "menu_item", request.params.id, "updated", item, saved, request.user?.id);
+        return readFnb(database, propertyId).menuItems.find((menuItem) => menuItem.id === request.params.id);
+      });
+      response.json(transaction.immediate());
+    } catch (error) {
+      sendError(response, error);
+    }
+  });
+
   app.patch("/api/fnb/menu-items/:id/availability", (request, response) => {
     if (!requireRole(request, response, managementRoles)) return;
     const available = request.body.available ? 1 : 0;
+    const item = database.prepare("SELECT * FROM menu_items WHERE id = ? AND property_id = ? AND deleted_at IS NULL").get(request.params.id, propertyId);
+    if (!item) return response.status(404).json({ error: "Menu item not found." });
+    if (available && !menuItemHasSufficientStock(database, propertyId, request.params.id)) {
+      return response.status(409).json({ error: "This menu item is unavailable because its tracked stock is insufficient." });
+    }
     const result = database.prepare("UPDATE menu_items SET available = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ? AND deleted_at IS NULL")
       .run(available, request.params.id, propertyId);
     if (!result.changes) return response.status(404).json({ error: "Menu item not found." });
-    audit(database, propertyId, "menu_item", request.params.id, available ? "enabled" : "unavailable", null, { available: Boolean(available) });
+    audit(database, propertyId, "menu_item", request.params.id, available ? "enabled" : "unavailable", null, { available: Boolean(available) }, request.user?.id);
     response.json({ id: request.params.id, available: Boolean(available) });
   });
 
@@ -291,6 +363,8 @@ export function registerFnbRoutes(app, database, propertyId) {
     if (!["room_charge", "cash", "card", "transfer"].includes(paymentMethod)) return response.status(400).json({ error: "Select a valid payment method." });
     try {
       const transaction = database.transaction(() => {
+        const idempotency = readIdempotency(database, request, propertyId, "fnb-order:create");
+        if (idempotency.response) return { replay: true, result: idempotency.response };
         let booking = null;
         if (paymentMethod === "room_charge") {
           booking = database.prepare(`
@@ -310,8 +384,7 @@ export function registerFnbRoutes(app, database, propertyId) {
           const item = database.prepare(`
             SELECT menu_items.*, menu_categories.name AS category_name
             FROM menu_items JOIN menu_categories ON menu_categories.id = menu_items.category_id
-            WHERE menu_items.id = ? AND menu_items.property_id = ?
-              AND menu_items.available = 1 AND menu_items.deleted_at IS NULL
+            WHERE menu_items.id = ? AND menu_items.property_id = ? AND menu_items.deleted_at IS NULL
           `).get(requestItem.menuItemId, propertyId);
           if (!item) throw problem("A selected menu item is unavailable.", 409);
           const chosenModifiers = [];
@@ -328,6 +401,12 @@ export function registerFnbRoutes(app, database, propertyId) {
           `).all(item.id, propertyId).filter((line) => !line.modifier_id || chosenModifiers.some((modifier) => modifier.id === line.modifier_id))
             .map((line) => ({ inventoryItemId: line.inventory_item_id, quantity: line.qty * quantity }));
           if (!recipe.length) throw problem(`${item.name} has no recipe. Ask a manager to add ingredients.`, 409);
+          const insufficiency = recipe.find((ingredient) => {
+            const stock = database.prepare("SELECT qty FROM inventory_items WHERE id = ? AND property_id = ? AND deleted_at IS NULL").get(ingredient.inventoryItemId, propertyId);
+            if (!stock) return true;
+            return Number(stock.qty) < Number(ingredient.quantity);
+          });
+          if (insufficiency) throw problem(`Not enough stock for ${item.name}.`, 409);
           itemSnapshots.push({ item, quantity, unitPrice, chosenModifiers, recipe });
           subtotal += unitPrice * quantity;
         }
@@ -359,10 +438,78 @@ export function registerFnbRoutes(app, database, propertyId) {
           snapshot.item.name, snapshot.item.station, snapshot.quantity, snapshot.unitPrice,
           JSON.stringify(snapshot.chosenModifiers), JSON.stringify(snapshot.recipe),
         );
-        audit(database, propertyId, "fnb_order", orderId, "created", null, { orderNumber, source, totalKobo: total, bookingId: booking?.id || null });
-        return readFnb(database, propertyId).orders.find((order) => order.id === orderId);
+        audit(database, propertyId, "fnb_order", orderId, "created", null, { orderNumber, source, totalKobo: total, bookingId: booking?.id || null }, request.user?.id);
+        const saved = readFnb(database, propertyId).orders.find((order) => order.id === orderId);
+        saveIdempotency(database, request, propertyId, "fnb-order:create", idempotency, saved);
+        return { replay: false, result: saved };
       });
-      response.status(201).json(transaction.immediate());
+      const posted = transaction.immediate();
+      response.status(posted.replay ? 200 : 201).json(posted.result);
+    } catch (error) {
+      sendError(response, error);
+    }
+  });
+
+  app.patch("/api/fnb/orders/:id", (request, response) => {
+    if (!requireRole(request, response, ["worker", ...managementRoles])) return;
+    try {
+      const transaction = database.transaction(() => {
+        const order = database.prepare("SELECT * FROM fnb_orders WHERE id = ? AND property_id = ? AND deleted_at IS NULL").get(request.params.id, propertyId);
+        if (!order) throw problem("Order not found.", 404);
+        if (order.status === "billed") throw problem("A billed order cannot be edited.", 409);
+        const updates = Array.isArray(request.body.items) ? request.body.items : [];
+        if (!updates.length) return readFnb(database, propertyId).orders.find((item) => item.id === order.id);
+
+        const orderLines = database.prepare("SELECT * FROM fnb_order_items WHERE order_id = ? AND property_id = ? AND deleted_at IS NULL").all(order.id, propertyId);
+        const lineMap = new Map(orderLines.map((line) => [line.id, line]));
+        const nextLines = [];
+        let newSubtotal = 0;
+        for (const update of updates) {
+          const line = lineMap.get(update.id);
+          if (!line) throw problem("Order item not found.", 404);
+          const originalQty = Number(line.qty || 0);
+          const nextQty = Number(update.quantity);
+          if (!Number.isInteger(nextQty) || nextQty <= 0) throw problem("Order item quantities must be positive whole numbers.", 400);
+          const delta = nextQty - originalQty;
+          const recipe = JSON.parse(line.recipe_snapshot_json || "[]");
+          if (delta > 0 && order.status === "accepted") {
+            for (const ingredient of recipe) {
+              const needed = Number(ingredient.quantity) * delta;
+              const stock = database.prepare("SELECT qty FROM inventory_items WHERE id = ? AND property_id = ? AND deleted_at IS NULL").get(ingredient.inventoryItemId, propertyId);
+              if (!stock || Number(stock.qty) < needed) throw problem(`Not enough stock for ${line.item_name}.`, 409);
+            }
+            for (const ingredient of recipe) {
+              consumeStock(database, propertyId, ingredient.inventoryItemId, Number(ingredient.quantity) * delta, order.id, `Order update ${order.order_number}`);
+            }
+          } else if (delta < 0 && order.status === "accepted") {
+            for (const ingredient of recipe) {
+              const restore = Number(ingredient.quantity) * Math.abs(delta);
+              database.prepare("UPDATE inventory_items SET qty = qty + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?")
+                .run(restore, ingredient.inventoryItemId, propertyId);
+              database.prepare("INSERT INTO stock_movements (id, property_id, item_id, type, qty, reason, ref, created_at, updated_at) VALUES (?, ?, ?, 'in', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+                .run(`MOV-${crypto.randomUUID()}`, propertyId, ingredient.inventoryItemId, restore, `Order update reversal ${order.order_number}`, order.id);
+            }
+          }
+          database.prepare("UPDATE fnb_order_items SET qty = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .run(nextQty, line.id);
+          const nextLine = { ...line, qty: nextQty, item_status: line.item_status };
+          nextLines.push(nextLine);
+          newSubtotal += Number(line.unit_price_kobo) * nextQty;
+        }
+
+        const currentOrder = database.prepare("SELECT * FROM fnb_orders WHERE id = ? AND property_id = ? AND deleted_at IS NULL").get(order.id, propertyId);
+        const subtotal = newSubtotal;
+        const discount = Math.max(0, Math.min(Number(currentOrder.discount_kobo || 0), subtotal));
+        const taxable = subtotal - discount;
+        const service = Math.round(taxable * readChargePercent(database, propertyId, "servicePercent") / 100);
+        const tax = Math.round(taxable * readChargePercent(database, propertyId, "vatPercent") / 100);
+        const total = taxable + service + tax;
+        database.prepare("UPDATE fnb_orders SET subtotal_kobo = ?, discount_kobo = ?, service_kobo = ?, tax_kobo = ?, total_kobo = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+          .run(subtotal, discount, service, tax, total, order.id);
+        audit(database, propertyId, "fnb_order", order.id, "updated", order, { ...order, subtotalKobo: subtotal, totalKobo: total, items: nextLines }, request.user?.id);
+        return readFnb(database, propertyId).orders.find((item) => item.id === order.id);
+      });
+      response.json(transaction.immediate());
     } catch (error) {
       sendError(response, error);
     }
@@ -398,6 +545,27 @@ export function registerFnbRoutes(app, database, propertyId) {
               .run(line.id);
           }
         }
+        if (status === "cancelled") {
+          const lines = database.prepare("SELECT * FROM fnb_order_items WHERE order_id = ? AND property_id = ? AND deleted_at IS NULL").all(order.id, propertyId);
+          if (order.status === "new") {
+            database.prepare("UPDATE fnb_order_items SET item_status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND property_id = ?")
+              .run(order.id, propertyId);
+          } else if (["accepted", "preparing", "ready"].includes(order.status)) {
+            for (const line of lines) {
+              if (!line.stock_posted) continue;
+              for (const ingredient of JSON.parse(line.recipe_snapshot_json || "[]")) {
+                database.prepare("UPDATE inventory_items SET qty = qty + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?")
+                  .run(Number(ingredient.quantity), ingredient.inventoryItemId, propertyId);
+                database.prepare("INSERT INTO stock_movements (id, property_id, item_id, type, qty, reason, ref, created_at, updated_at) VALUES (?, ?, ?, 'in', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+                  .run(`MOV-${crypto.randomUUID()}`, propertyId, ingredient.inventoryItemId, Number(ingredient.quantity), `Cancelled order reversal ${order.order_number}`, order.id);
+              }
+              database.prepare("UPDATE fnb_order_items SET stock_posted = 0, item_status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                .run(line.id);
+            }
+          }
+          database.prepare("UPDATE fnb_orders SET status = 'cancelled', subtotal_kobo = 0, discount_kobo = 0, service_kobo = 0, tax_kobo = 0, total_kobo = 0, billed_at = CASE WHEN billed_at IS NULL THEN billed_at ELSE billed_at END, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .run(order.id);
+        }
         if (status === "preparing" || status === "ready" || status === "served") {
           database.prepare("UPDATE fnb_order_items SET item_status = ?, updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND property_id = ? AND item_status != 'cancelled'")
             .run(status, order.id, propertyId);
@@ -423,9 +591,11 @@ export function registerFnbRoutes(app, database, propertyId) {
               .run(paymentId, propertyId, order.id, order.payment_method, order.total_kobo, `POS-${order.order_number}`);
           }
         }
-        database.prepare("UPDATE fnb_orders SET status = ?, billed_at = CASE WHEN ? = 'billed' THEN CURRENT_TIMESTAMP ELSE billed_at END, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-          .run(status, status, order.id);
-        audit(database, propertyId, "fnb_order", order.id, status, order, { ...order, status });
+        if (status !== "cancelled") {
+          database.prepare("UPDATE fnb_orders SET status = ?, billed_at = CASE WHEN ? = 'billed' THEN CURRENT_TIMESTAMP ELSE billed_at END, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .run(status, status, order.id);
+        }
+        audit(database, propertyId, "fnb_order", order.id, status, order, { ...order, status }, request.user?.id);
         return readFnb(database, propertyId).orders.find((item) => item.id === order.id);
       });
       response.json(transaction.immediate());
@@ -441,6 +611,8 @@ export function registerFnbRoutes(app, database, propertyId) {
     if (!Number.isSafeInteger(amount) || amount <= 0 || !reason) return response.status(400).json({ error: "Refund amount and reason are required." });
     try {
       const transaction = database.transaction(() => {
+        const idempotency = readIdempotency(database, request, propertyId, `fnb-order:${request.params.id}:refund`);
+        if (idempotency.response) return { replay: true, result: idempotency.response };
         const order = database.prepare("SELECT * FROM fnb_orders WHERE id = ? AND property_id = ? AND status = 'billed' AND deleted_at IS NULL").get(request.params.id, propertyId);
         if (!order) throw problem("Only billed orders can be refunded.", 409);
         const paid = database.prepare("SELECT COALESCE(sum(amount_kobo), 0) AS amount FROM fnb_order_payments WHERE order_id = ? AND status = 'paid'").get(order.id).amount;
@@ -471,10 +643,12 @@ export function registerFnbRoutes(app, database, propertyId) {
         };
         database.prepare("INSERT INTO fnb_order_payments (id, property_id, order_id, method, amount_kobo, status, original_payment_id, reference, reason, created_at, updated_at) VALUES (?, ?, ?, 'refund', ?, 'refunded', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
           .run(refund.id, propertyId, order.id, refund.amount, refund.originalPaymentId, refund.reference, refund.reason);
-        audit(database, propertyId, "fnb_order", order.id, "refunded", order, refund);
-        return refund;
+        audit(database, propertyId, "fnb_order", order.id, "refunded", order, refund, request.user?.id);
+        saveIdempotency(database, request, propertyId, `fnb-order:${request.params.id}:refund`, idempotency, refund);
+        return { replay: false, result: refund };
       });
-      response.status(201).json(transaction.immediate());
+      const posted = transaction.immediate();
+      response.status(posted.replay ? 200 : 201).json(posted.result);
     } catch (error) {
       sendError(response, error);
     }
@@ -514,7 +688,7 @@ export function registerFnbRoutes(app, database, propertyId) {
             .run(movementId, propertyId, item.id, variance, `Physical count: ${reason}`, `COUNT-${new Date().toISOString()}`);
           movement = database.prepare("SELECT * FROM stock_movements WHERE id = ?").get(movementId);
         }
-        audit(database, propertyId, "inventory_item", item.id, "physical_count", item, { counted: count, variance, reason });
+        audit(database, propertyId, "inventory_item", item.id, "physical_count", item, { counted: count, variance, reason }, request.user?.id);
         const updated = database.prepare("SELECT * FROM inventory_items WHERE id = ?").get(item.id);
         return { item: { id: updated.id, name: updated.name, category: updated.category, unit: updated.unit, quantity: updated.qty, minimum: updated.min_qty, costKobo: updated.cost_kobo, supplierId: updated.supplier_id || "", databaseItem: true }, movement: movement && { id: movement.id, itemId: movement.item_id, type: movement.type, quantity: movement.qty, reason: movement.reason, date: movement.created_at.slice(0, 10), databaseMovement: true }, variance };
       });
@@ -531,6 +705,8 @@ export function registerFnbRoutes(app, database, propertyId) {
     if (!Number.isFinite(qty) || qty <= 0) return response.status(400).json({ error: "Enter a minibar quantity above zero." });
     try {
       const transaction = database.transaction(() => {
+        const idempotency = readIdempotency(database, request, propertyId, `minibar:${request.params.id}:consume`);
+        if (idempotency.response) return { replay: true, result: idempotency.response };
         const room = database.prepare("SELECT id FROM units WHERE id = ? AND property_id = ? AND deleted_at IS NULL").get(unitId, propertyId);
         const item = database.prepare("SELECT * FROM inventory_items WHERE id = ? AND property_id = ? AND deleted_at IS NULL").get(request.params.id, propertyId);
         if (!room || !item) throw problem("Choose an active room and inventory item.");
@@ -554,10 +730,13 @@ export function registerFnbRoutes(app, database, propertyId) {
         }
         database.prepare("INSERT INTO minibar_movements (id, property_id, unit_id, booking_id, item_id, qty, unit_price_kobo, booking_extra_id, movement_type, reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'consume', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
           .run(movementId, propertyId, unitId, bookingId || null, item.id, qty, price, extraId, reason);
-        audit(database, propertyId, "minibar_movement", movementId, "consume", null, { unitId, bookingId, itemId: item.id, quantity: qty, unitPriceKobo: price });
-        return { id: movementId, itemId: item.id, unitId, bookingId, quantity: qty, unitPriceKobo: price, extraId };
+        audit(database, propertyId, "minibar_movement", movementId, "consume", null, { unitId, bookingId, itemId: item.id, quantity: qty, unitPriceKobo: price }, request.user?.id);
+        const saved = { id: movementId, itemId: item.id, unitId, bookingId, quantity: qty, unitPriceKobo: price, extraId };
+        saveIdempotency(database, request, propertyId, `minibar:${request.params.id}:consume`, idempotency, saved);
+        return { replay: false, result: saved };
       });
-      response.status(201).json(transaction.immediate());
+      const posted = transaction.immediate();
+      response.status(posted.replay ? 200 : 201).json(posted.result);
     } catch (error) {
       sendError(response, error);
     }
