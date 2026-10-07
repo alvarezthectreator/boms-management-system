@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 
 const sessionCookie = "boms_session";
 const sessionDurationMs = 12 * 60 * 60 * 1000;
-const loginAttempts = new Map();
 
 export function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString("hex");
@@ -75,26 +74,15 @@ async function applyRoleFiltering(database, propertyId, user) {
 export function registerAuthRoutes(app, database, propertyId) {
   app.post("/api/auth/login", async (request, response) => {
     const email = normalizeEmail(request.body.email);
-    const password = String(request.body.password || "");
-    const ipAddress = request.ip || "local";
     const now = Date.now();
-    const attempts = loginAttempts.get(ipAddress) || { count: 0, startedAt: now };
-    if (now - attempts.startedAt > 15 * 60 * 1000) {
-      attempts.count = 0;
-      attempts.startedAt = now;
-    }
-    if (attempts.count >= 8) return response.status(429).json({ error: "Too many sign-in attempts. Try again in 15 minutes." });
-
     const user = await database.get(`
-      SELECT id, name, email, role, password_hash FROM users
+      SELECT id, name, email, role FROM users
       WHERE property_id = ? AND lower(email) = ? AND active = 1 AND deleted_at IS NULL
     `, [propertyId, email]);
-    if (!user?.password_hash || !verifyPassword(password, user.password_hash)) {
-      attempts.count += 1;
-      loginAttempts.set(ipAddress, attempts);
-      return response.status(401).json({ error: "Email or password is incorrect." });
+    if (!user) {
+      return response.status(401).json({ error: "Username is not registered." });
     }
-    loginAttempts.delete(ipAddress);
+
     const token = crypto.randomBytes(32).toString("base64url");
     const expiresAt = new Date(now + sessionDurationMs).toISOString().replace("T", " ").slice(0, 19);
     await database.run("INSERT INTO auth_sessions (id, property_id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",

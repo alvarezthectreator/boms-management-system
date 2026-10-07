@@ -546,24 +546,20 @@ test("daily close uses persisted receipts and enforces manager access", async ()
   database.close();
 });
 
-test("password login creates an HttpOnly session and role headers cannot authenticate", async () => {
+test("username login creates an HttpOnly session without a password", async () => {
   const database = createTestDatabase();
   const app = createRouteApp();
-  const password = "correct-horse-battery-staple";
-  const passwordHash = hashPassword(password);
   database.prepare("INSERT INTO users (id, property_id, name, email, role, password_hash, active) VALUES ('worker-1', ?, 'Front Desk', 'desk@example.test', 'worker', ?, 1)")
-    .run(propertyId, passwordHash);
+    .run(propertyId, hashPassword("unused-password"));
   registerAuthRoutes(app, database, propertyId);
 
-  const invalid = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "wrong-password" } });
+  const invalid = await app.call("POST", "/api/auth/login", { body: { email: "unknown@example.test" } });
   assert.equal(invalid.code, 401);
-  const login = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password } });
+  const login = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "anything" } });
   assert.equal(login.code, 200);
   assert.match(login.headers["set-cookie"], /HttpOnly/);
   assert.match(login.headers["set-cookie"], /SameSite=Strict/);
   assert.equal(login.body.user.role, "worker");
-  assert.equal(verifyPassword(password, passwordHash), true);
-  assert.equal(verifyPassword("incorrect", passwordHash), false);
 
   const middleware = createAuthMiddleware(database, propertyId);
   const denied = { code: 200, status(code) { this.code = code; return this; }, json(body) { this.body = body; } };
