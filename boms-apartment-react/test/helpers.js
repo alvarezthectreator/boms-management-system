@@ -75,7 +75,8 @@ export function createTestDatabase() {
     CREATE TABLE inventory_batches (
       id TEXT PRIMARY KEY, property_id TEXT, item_id TEXT, batch_code TEXT,
       received_qty REAL, remaining_qty REAL, unit_cost_kobo INTEGER,
-      received_at TEXT, expiry_date TEXT, deleted_at TEXT, updated_at TEXT
+      received_at TEXT, expiry_date TEXT, supplier_id TEXT, created_at TEXT,
+      created_by TEXT, deleted_at TEXT, updated_at TEXT
     );
     CREATE TABLE stock_movements (
       id TEXT PRIMARY KEY, property_id TEXT, item_id TEXT, type TEXT, qty REAL,
@@ -145,6 +146,16 @@ export function createTestDatabase() {
       UNIQUE (property_id, close_date)
     );
   `);
+  database.get = (sql, values = []) => database.prepare(sql).get(...values);
+  database.all = (sql, values = []) => database.prepare(sql).all(...values);
+  database.run = (sql, values = []) => database.prepare(sql).run(...values);
+  database.withTransaction = (callback) => callback({
+    prepare: (sql) => database.prepare(sql),
+    get: database.get,
+    getForUpdate: database.get,
+    all: database.all,
+    run: database.run,
+  });
   return database;
 }
 
@@ -184,7 +195,7 @@ export function createRouteApp() {
         setHeader(name, value) { this.headers[name.toLowerCase()] = value; return this; },
         end() { this.ended = true; return this; },
       };
-      route.handler({
+      const handlerResult = route.handler({
         body,
         path: resourcePath,
         query,
@@ -198,7 +209,9 @@ export function createRouteApp() {
         params: Object.fromEntries(names.map((name, index) => [name, decodeURIComponent(match[index + 1])])),
         get(name) { return headers[name.toLowerCase()] || headers[name] || undefined; },
       }, response);
-      return response;
+      return handlerResult && typeof handlerResult.then === "function"
+        ? handlerResult.then(() => response)
+        : response;
     },
   };
 }

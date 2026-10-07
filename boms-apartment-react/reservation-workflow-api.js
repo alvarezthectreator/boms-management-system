@@ -24,8 +24,8 @@ export function workerMayCheckOut(status, checkOut, today, time, balanceKobo) {
   return status === "checked_in" && checkOut === today && time >= "12:00" && balanceKobo <= 0;
 }
 
-function settingPercent(database, propertyId, key) {
-  const row = database.prepare("SELECT value_json FROM property_settings WHERE property_id = ? AND key = ?").get(propertyId, key);
+async function settingPercent(database, propertyId, key) {
+  const row = await database.get("SELECT value_json FROM property_settings WHERE property_id = ? AND key = ?", [propertyId, key]);
   const value = Number(row ? JSON.parse(row.value_json) : 0);
   return Number.isFinite(value) && value >= 0 ? value : 0;
 }
@@ -36,7 +36,7 @@ export function registerReservationWorkflowRoutes(
   propertyId,
   { getDateTime = getLagosDateTime } = {},
 ) {
-  app.patch("/api/reservations/:id/extend", (request, response) => {
+  app.patch("/api/reservations/:id/extend", async (request, response) => {
     const role = request.user?.role;
     if (!["worker", "manager", "ceo"].includes(role)) {
       return response.status(403).json({ error: "Your role cannot extend a stay." });
@@ -48,12 +48,12 @@ export function registerReservationWorkflowRoutes(
     }
 
     try {
-      const extend = database.transaction(() => {
-        const booking = database.prepare(`
+      const result = await database.withTransaction(async (transaction) => {
+        const booking = await transaction.get(`
           SELECT id, unit_id, check_in, check_out, nights, rate_kobo, status,
                  subtotal_kobo, service_kobo, vat_kobo, total_kobo
           FROM bookings WHERE id = ? AND property_id = ? AND deleted_at IS NULL
-        `).get(request.params.id, propertyId);
+        `, [request.params.id, propertyId]);
         if (!booking) throw problem("Reservation not found.", 404);
         if (booking.status !== "checked_in" || booking.check_out !== date) {
           throw problem("Only a checked-in guest due to check out today can be extended.", 409);
@@ -62,28 +62,28 @@ export function registerReservationWorkflowRoutes(
         const nextCheckOut = new Date(Date.parse(`${booking.check_out}T00:00:00Z`) + 86400000)
           .toISOString()
           .slice(0, 10);
-        const conflict = database.prepare(`
+        const conflict = await transaction.get(`
           SELECT id FROM bookings
           WHERE unit_id = ? AND id != ? AND property_id = ? AND deleted_at IS NULL
             AND status IN ('hold', 'confirmed', 'checked_in')
             AND check_in < ? AND check_out > ?
           LIMIT 1
-        `).get(booking.unit_id, booking.id, propertyId, nextCheckOut, booking.check_out);
+        `, [booking.unit_id, booking.id, propertyId, nextCheckOut, booking.check_out]);
         if (conflict) throw problem("The room is already booked for the extra night.", 409);
-        const block = database.prepare(`
+        const block = await transaction.get(`
           SELECT id FROM out_of_order_blocks
           WHERE unit_id = ? AND property_id = ? AND deleted_at IS NULL
             AND start_date < ? AND end_date > ?
           LIMIT 1
-        `).get(booking.unit_id, propertyId, nextCheckOut, booking.check_out);
+        `, [booking.unit_id, propertyId, nextCheckOut, booking.check_out]);
         if (block) throw problem("The room is blocked for the extra night.", 409);
         const nightlyRate = Number(booking.rate_kobo);
         if (!Number.isSafeInteger(nightlyRate) || nightlyRate <= 0) {
           throw problem("This reservation has no valid nightly rate. Ask a manager to review it.", 409);
         }
 
-        const serviceKobo = Math.round(nightlyRate * settingPercent(database, propertyId, "servicePercent") / 100);
-        const vatKobo = Math.round(nightlyRate * settingPercent(database, propertyId, "vatPercent") / 100);
+        const serviceKobo = Math.round(nightlyRate * await settingPercent(transaction, propertyId, "servicePercent") / 100);
+        const vatKobo = Math.round(nightlyRate * await settingPercent(transaction, propertyId, "vatPercent") / 100);
         const totalKobo = nightlyRate + serviceKobo + vatKobo;
         const updated = {
           ...booking,
@@ -94,23 +94,23 @@ export function registerReservationWorkflowRoutes(
           vat_kobo: Number(booking.vat_kobo || 0) + vatKobo,
           total_kobo: Number(booking.total_kobo || 0) + totalKobo,
         };
-        database.prepare(`
+        await transaction.run(`
           UPDATE bookings SET check_out = ?, nights = ?, subtotal_kobo = ?,
             service_kobo = ?, vat_kobo = ?, total_kobo = ?, updated_at = CURRENT_TIMESTAMP
           WHERE id = ? AND property_id = ?
-        `).run(updated.check_out, updated.nights, updated.subtotal_kobo,
-          updated.service_kobo, updated.vat_kobo, updated.total_kobo, booking.id, propertyId);
-        database.prepare(`
+        `, [updated.check_out, updated.nights, updated.subtotal_kobo,
+          updated.service_kobo, updated.vat_kobo, updated.total_kobo, booking.id, propertyId]);
+        await transaction.run(`
           UPDATE invoices SET total_kobo = ?,
             status = CASE WHEN paid_kobo >= ? THEN 'paid' ELSE 'issued' END,
             updated_at = CURRENT_TIMESTAMP
           WHERE booking_id = ? AND property_id = ? AND deleted_at IS NULL
-        `).run(updated.total_kobo, updated.total_kobo, booking.id, propertyId);
-        database.prepare(`
+        `, [updated.total_kobo, updated.total_kobo, booking.id, propertyId]);
+        await transaction.run(`
           INSERT INTO audit_logs (id, property_id, user_id, entity, entity_id, action, old_json, new_json, created_at)
           VALUES (?, ?, ?, 'booking', ?, 'extended_one_night', ?, ?, CURRENT_TIMESTAMP)
-        `).run(`AUD-${crypto.randomUUID()}`, propertyId, request.user.id, booking.id,
-          JSON.stringify(booking), JSON.stringify(updated));
+        `, [`AUD-${crypto.randomUUID()}`, propertyId, request.user.id, booking.id,
+          JSON.stringify(booking), JSON.stringify(updated)]);
 
         return {
           id: booking.id,
@@ -122,7 +122,7 @@ export function registerReservationWorkflowRoutes(
           totalKobo: updated.total_kobo,
         };
       });
-      response.json(extend.immediate());
+      response.json(result);
     } catch (error) {
       sendError(response, error);
     }

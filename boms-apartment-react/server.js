@@ -1,58 +1,95 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import express from "express";
 import Database from "better-sqlite3";
-import { findBookingConflict } from "./availability.js";
+import { findBookingConflictAsync } from "./availability.js";
 import { registerOperationsRoutes } from "./operations-api.js";
 import { registerFnbRoutes } from "./fnb-api.js";
 import { registerWorkspaceRoutes } from "./workspace-api.js";
 import { getLagosDateTime, registerReservationWorkflowRoutes, workerMayCheckOut } from "./reservation-workflow-api.js";
 import { createAuthMiddleware, registerAuthRoutes } from "./auth-api.js";
+import { createPostgresDatabase, createPostgresPool } from "./postgres-db.js";
+import { supabaseSessionMiddleware } from "./utils/supabase/middleware.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const databasePath = path.resolve(process.env.BOMS_DB_PATH || path.join(root, "data", "boms.sqlite"));
-fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-const database = new Database(databasePath);
-database.pragma("foreign_keys = ON");
-database.exec(fs.readFileSync(path.join(root, "db", "002_named_rooms.sql"), "utf8"));
-database.exec(fs.readFileSync(path.join(root, "db", "003_room_defaults.sql"), "utf8"));
-database.exec(fs.readFileSync(path.join(root, "db", "004_manager_name.sql"), "utf8"));
-database.exec(fs.readFileSync(path.join(root, "db", "005_fnb_inventory.sql"), "utf8"));
-if (!database.pragma("table_info(fnb_orders)").some((column) => column.name === "service_kobo")) {
-  database.exec(fs.readFileSync(path.join(root, "db", "006_fnb_service_charge.sql"), "utf8"));
+const postgresMode = Boolean(process.env.DATABASE_URL);
+let database;
+if (postgresMode) {
+  database = createPostgresDatabase(createPostgresPool());
+} else {
+  const databasePath = path.resolve(process.env.BOMS_DB_PATH || path.join(root, "data", "boms.sqlite"));
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  database = new Database(databasePath);
+  database.pragma("foreign_keys = ON");
+  database.get = (sql, values = []) => database.prepare(sql).get(...values);
+  database.all = (sql, values = []) => database.prepare(sql).all(...values);
+  database.run = (sql, values = []) => database.prepare(sql).run(...values);
+  database.withTransaction = async (callback) => {
+    const transaction = {
+      prepare: (sql) => database.prepare(sql),
+      get: database.get,
+      getForUpdate: database.get,
+      all: database.all,
+      run: database.run,
+    };
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = await callback(transaction);
+      database.exec("COMMIT");
+      return result;
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+  };
+  database.transaction = database.withTransaction;
+  database.exec(fs.readFileSync(path.join(root, "db", "002_named_rooms.sql"), "utf8"));
+  database.exec(fs.readFileSync(path.join(root, "db", "003_room_defaults.sql"), "utf8"));
+  database.exec(fs.readFileSync(path.join(root, "db", "004_manager_name.sql"), "utf8"));
+  database.exec(fs.readFileSync(path.join(root, "db", "005_fnb_inventory.sql"), "utf8"));
+  if (!database.pragma("table_info(fnb_orders)").some((column) => column.name === "service_kobo")) {
+    database.exec(fs.readFileSync(path.join(root, "db", "006_fnb_service_charge.sql"), "utf8"));
+  }
+  if (!database.pragma("table_info(purchase_order_lines)").some((column) => column.name === "expiry_date")) {
+    database.exec(fs.readFileSync(path.join(root, "db", "007_purchase_expiry.sql"), "utf8"));
+  }
+  database.exec(fs.readFileSync(path.join(root, "db", "008_auth_sessions.sql"), "utf8"));
+  database.exec(fs.readFileSync(path.join(root, "db", "009_idempotency.sql"), "utf8"));
+  database.exec(fs.readFileSync(path.join(root, "db", "010_audit_append_only.sql"), "utf8"));
 }
-if (!database.pragma("table_info(purchase_order_lines)").some((column) => column.name === "expiry_date")) {
-  database.exec(fs.readFileSync(path.join(root, "db", "007_purchase_expiry.sql"), "utf8"));
-}
-database.exec(fs.readFileSync(path.join(root, "db", "008_auth_sessions.sql"), "utf8"));
-database.exec(fs.readFileSync(path.join(root, "db", "009_idempotency.sql"), "utf8"));
-database.exec(fs.readFileSync(path.join(root, "db", "010_audit_append_only.sql"), "utf8"));
 
 const app = express();
 const port = Number(process.env.API_PORT || 3001);
 const propertyId = "property_boms";
-database.exec("CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
-if (!database.prepare("SELECT name FROM app_migrations WHERE name = ?").get("zero_service_and_vat_rates")) {
-  const migrateChargeRates = database.transaction(() => {
+if (!postgresMode) {
+  database.exec("CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
+}
+if (!postgresMode && !database.prepare("SELECT name FROM app_migrations WHERE name = ?").get("zero_service_and_vat_rates")) {
+  await database.transaction(() => {
     database.prepare("UPDATE property_settings SET value_json = '0', updated_at = CURRENT_TIMESTAMP WHERE property_id = ? AND key IN ('servicePercent', 'vatPercent')")
       .run(propertyId);
     database.prepare("INSERT INTO app_migrations (name, applied_at) VALUES (?, CURRENT_TIMESTAMP)")
       .run("zero_service_and_vat_rates");
   });
-  migrateChargeRates.immediate();
 }
 app.use(express.json({ limit: "7mb" }));
 app.use("/api/room-images", express.static(path.join(root, "public", "room-images")));
+app.use("/api", (request, response, next) => {
+  if (request.headers.cookie?.includes("sb_")) {
+    return supabaseSessionMiddleware(request, response, next);
+  }
+  return next();
+});
 app.use("/api", createAuthMiddleware(database, "property_boms"));
 registerAuthRoutes(app, database, "property_boms");
 
-function listRooms() {
+async function listRooms() {
   const today = new Intl.DateTimeFormat("sv-SE", {
     timeZone: "Africa/Lagos",
   }).format(new Date());
-  return database.prepare(`
+  return (await database.all(`
     SELECT
       units.id,
       units.name,
@@ -72,17 +109,17 @@ function listRooms() {
         FROM bookings
         WHERE bookings.unit_id = units.id
           AND bookings.status IN ('hold', 'confirmed', 'checked_in')
-          AND bookings.check_in <= @today
-          AND bookings.check_out > @today
+          AND bookings.check_in <= ?
+          AND bookings.check_out > ?
           AND bookings.deleted_at IS NULL
       ) AS active_reservations
     FROM units
     JOIN room_types ON room_types.id = units.room_type_id
-    WHERE units.property_id = @propertyId
+    WHERE units.property_id = ?
       AND units.deleted_at IS NULL
       AND room_types.deleted_at IS NULL
     ORDER BY units.name
-  `).all({ propertyId, today }).map((room) => ({
+  `, [today, today, propertyId])).map((room) => ({
     id: room.id,
     name: room.name,
     number: room.number,
@@ -100,15 +137,15 @@ function listRooms() {
   }));
 }
 
-function getRoom(id) {
-  return database.prepare(`
+async function getRoom(id, connection = database) {
+  return connection.get(`
     SELECT units.id, units.number, units.status, units.room_type_id,
            room_types.base_rate_kobo, room_types.max_guests
     FROM units
     JOIN room_types ON room_types.id = units.room_type_id
     WHERE units.id = ? AND units.property_id = ?
       AND units.deleted_at IS NULL AND room_types.deleted_at IS NULL
-  `).get(id, propertyId);
+  `, [id, propertyId]);
 }
 
 function parseImage(body, roomId) {
@@ -140,30 +177,30 @@ function sendError(response, error) {
   response.status(error.status || 500).json({ error: error.message || "Request failed." });
 }
 
-function writeAudit(request, entity, entityId, action, before, after) {
-  database.prepare(`
+async function writeAudit(request, entity, entityId, action, before, after, connection = database) {
+  await connection.run(`
     INSERT INTO audit_logs (id, property_id, user_id, entity, entity_id, action, old_json, new_json, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-  `).run(`AUD-${crypto.randomUUID()}`, propertyId, request.user?.id || null, entity, entityId, action,
-    before == null ? null : JSON.stringify(before), after == null ? null : JSON.stringify(after));
+  `, [`AUD-${crypto.randomUUID()}`, propertyId, request.user?.id || null, entity, entityId, action,
+    before == null ? null : JSON.stringify(before), after == null ? null : JSON.stringify(after)]);
 }
 
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true });
 });
 
-app.get("/api/rooms", (_request, response) => {
-  response.json(listRooms());
+app.get("/api/rooms", async (_request, response) => {
+  response.json(await listRooms());
 });
 
-app.patch("/api/rooms/:id", (request, response) => {
+app.patch("/api/rooms/:id", async (request, response) => {
   try {
     if (request.user.role !== "ceo") {
       return response.status(403).json({ error: "Only an admin can edit room details." });
     }
-    const room = getRoom(request.params.id);
+    const room = await getRoom(request.params.id);
     if (!room) return response.status(404).json({ error: "Room not found." });
-    const before = listRooms().find((item) => item.id === room.id);
+    const before = (await listRooms()).find((item) => item.id === room.id);
     const imageUrl = parseImage(request.body, room.id);
     const rateNaira = request.body.rateNaira;
     const bedType = request.body.sharedBedType;
@@ -173,57 +210,53 @@ app.patch("/api/rooms/:id", (request, response) => {
     if (bedType !== undefined && !String(bedType).trim()) {
       return response.status(400).json({ error: "Enter the shared bed size." });
     }
-    const update = database.transaction(() => {
+    await database.withTransaction(async (transaction) => {
       if (imageUrl) {
-        database.prepare(`UPDATE room_types SET photos_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-          .run(JSON.stringify([imageUrl]), room.room_type_id);
+        await transaction.run("UPDATE room_types SET photos_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [JSON.stringify([imageUrl]), room.room_type_id]);
       }
       if (rateNaira !== undefined && rateNaira !== "") {
-        database.prepare(`UPDATE room_types SET base_rate_kobo = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-          .run(Math.round(Number(rateNaira) * 100), room.room_type_id);
+        await transaction.run("UPDATE room_types SET base_rate_kobo = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [Math.round(Number(rateNaira) * 100), room.room_type_id]);
       }
       if (bedType !== undefined) {
-        database.prepare(`
+        await transaction.run(`
           UPDATE room_types SET bed_type = ?, updated_at = CURRENT_TIMESTAMP
           WHERE property_id = ? AND deleted_at IS NULL
-        `).run(String(bedType).trim(), propertyId);
+        `, [String(bedType).trim(), propertyId]);
       }
     });
-    update();
-    const updated = listRooms().find((item) => item.id === room.id);
-    writeAudit(request, "room", room.id, "updated", before, updated);
+    const updated = (await listRooms()).find((item) => item.id === room.id);
+    await writeAudit(request, "room", room.id, "updated", before, updated);
     response.json(updated);
   } catch (error) {
     sendError(response, error);
   }
 });
 
-app.patch("/api/rooms/:id/status", (request, response) => {
+app.patch("/api/rooms/:id/status", async (request, response) => {
   if (!['manager', 'ceo'].includes(request.user.role)) {
     return response.status(403).json({ error: "Only a manager or admin can change room status." });
   }
   const statuses = ["available", "occupied", "dirty", "cleaning", "inspected", "out_of_order"];
   const { status } = request.body;
   if (!statuses.includes(status)) return response.status(400).json({ error: "Invalid room status." });
-  const before = listRooms().find((room) => room.id === request.params.id);
-  const update = database.prepare(`
+  const before = (await listRooms()).find((room) => room.id === request.params.id);
+  const update = await database.run(`
     UPDATE units SET status = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND property_id = ? AND deleted_at IS NULL
-  `).run(status, request.params.id, propertyId);
+  `, [status, request.params.id, propertyId]);
   if (!update.changes) return response.status(404).json({ error: "Room not found." });
-  response.json(listRooms().find((room) => room.id === request.params.id));
-  const updated = listRooms().find((room) => room.id === request.params.id);
-  writeAudit(request, "room", request.params.id, "status_changed", before, updated);
+  const updated = (await listRooms()).find((room) => room.id === request.params.id);
+  await writeAudit(request, "room", request.params.id, "status_changed", before, updated);
   response.json(updated);
 });
 
-app.get("/api/blocks", (_request, response) => {
-  const blocks = database.prepare(`
+app.get("/api/blocks", async (_request, response) => {
+  const blocks = (await database.all(`
     SELECT id, unit_id, start_date, end_date, reason
     FROM out_of_order_blocks
     WHERE property_id = ? AND deleted_at IS NULL
     ORDER BY start_date
-  `).all(propertyId).map((block) => ({
+  `, [propertyId])).map((block) => ({
     id: block.id,
     unitId: block.unit_id,
     start: block.start_date,
@@ -234,25 +267,24 @@ app.get("/api/blocks", (_request, response) => {
   response.json(blocks);
 });
 
-app.post("/api/rooms/:id/blocks", (request, response) => {
+app.post("/api/rooms/:id/blocks", async (request, response) => {
   if (!["manager", "ceo"].includes(request.user.role)) {
     return response.status(403).json({ error: "Only a manager or admin can block room dates." });
   }
-  const room = getRoom(request.params.id);
+  const room = await getRoom(request.params.id);
   const { start, end, reason } = request.body;
   if (!room) return response.status(404).json({ error: "Room not found." });
-  writeAudit(request, "room_block", block.id, "created", null, block);
   if (!start || !end || end <= start || !String(reason || "").trim()) {
     return response.status(400).json({ error: "Enter a valid date range and reason." });
   }
-  const insert = database.transaction(() => {
-    const booking = database.prepare(`
+  const insert = database.withTransaction(async (transaction) => {
+    const booking = await transaction.get(`
       SELECT id FROM bookings
       WHERE unit_id = ? AND deleted_at IS NULL
         AND status IN ('hold', 'confirmed', 'checked_in')
         AND check_in < ? AND check_out > ?
       LIMIT 1
-    `).get(room.id, end, start);
+    `, [room.id, end, start]);
     if (booking) throw Object.assign(new Error("Move overlapping reservations before blocking this room."), { status: 409 });
     const block = {
       id: `BLK-${crypto.randomUUID()}`,
@@ -261,22 +293,23 @@ app.post("/api/rooms/:id/blocks", (request, response) => {
       end,
       reason: String(reason).trim(),
     };
-    database.prepare(`
+    await transaction.run(`
       INSERT INTO out_of_order_blocks (
         id, property_id, unit_id, start_date, end_date, reason, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `).run(block.id, propertyId, block.unitId, block.start, block.end, block.reason);
+    `, [block.id, propertyId, block.unitId, block.start, block.end, block.reason]);
+    await writeAudit(request, "room_block", block.id, "created", null, block);
     return block;
   });
   try {
-    response.status(201).json(insert.immediate());
+    response.status(201).json(await insert);
   } catch (error) {
     sendError(response, error);
   }
 });
 
-app.get("/api/reservations", (_request, response) => {
-  const reservations = database.prepare(`
+app.get("/api/reservations", async (_request, response) => {
+  const reservationRows = await database.all(`
     SELECT bookings.*, guests.full_name, guests.phone, guests.email, guests.nationality,
           guests.id_number, guests.loyalty_tier, guests.points,
           COALESCE(sum(CASE WHEN payments.status IN ('paid', 'refunded', 'part_refunded') THEN payments.amount_kobo ELSE 0 END), 0) AS paid_kobo
@@ -286,7 +319,8 @@ app.get("/api/reservations", (_request, response) => {
     WHERE bookings.property_id = ? AND bookings.deleted_at IS NULL
         GROUP BY bookings.id
     ORDER BY bookings.created_at DESC
-  `).all(propertyId).map((booking) => ({
+  `, [propertyId]);
+  const reservations = reservationRows.map((booking) => ({
     id: booking.id,
     guestId: booking.guest_id,
     guest: {
@@ -308,17 +342,17 @@ app.get("/api/reservations", (_request, response) => {
     status: booking.status,
     source: booking.source,
     requests: booking.requests || "",
-    totalKobo: booking.total_kobo,
-    paidKobo: booking.paid_kobo,
-    discountKobo: booking.discount_kobo,
-    subtotalKobo: booking.subtotal_kobo,
-    serviceKobo: booking.service_kobo,
-    vatKobo: booking.vat_kobo,
+    totalKobo: Number(booking.total_kobo || 0),
+    paidKobo: Number(booking.paid_kobo || 0),
+    discountKobo: Number(booking.discount_kobo || 0),
+    subtotalKobo: Number(booking.subtotal_kobo || 0),
+    serviceKobo: Number(booking.service_kobo || 0),
+    vatKobo: Number(booking.vat_kobo || 0),
   }));
   response.json(reservations);
 });
 
-app.patch("/api/reservations/:id/status", (request, response) => {
+app.patch("/api/reservations/:id/status", async (request, response) => {
   const { status, reason = "", refundKobo = 0 } = request.body;
   const role = request.user.role;
   const allowedStatuses = ["hold", "confirmed", "checked_in", "checked_out", "cancelled", "no_show"];
@@ -338,23 +372,28 @@ app.patch("/api/reservations/:id/status", (request, response) => {
     return response.status(403).json({ error: "Manager refunds are limited to ₦50,000." });
   }
   try {
-    const update = database.transaction(() => {
-      const booking = database.prepare(`
-        SELECT unit_id, check_in, check_out, status
+    const result = await database.withTransaction(async (transaction) => {
+      const booking = await transaction.getForUpdate(`
+        SELECT *
         FROM bookings WHERE id = ? AND property_id = ? AND deleted_at IS NULL
-      `).get(request.params.id, propertyId);
+      `, [request.params.id, propertyId]);
       if (!booking) throw Object.assign(new Error("Reservation not found."), { status: 404 });
       if (workerCheckout) {
         const { date, time } = getLagosDateTime();
-        const invoice = database.prepare(`
+        const invoice = await transaction.getForUpdate(`
           SELECT COALESCE(sum(max(0, total_kobo - paid_kobo)), 0) AS balance_kobo
           FROM invoices WHERE booking_id = ? AND property_id = ? AND deleted_at IS NULL
-        `).get(request.params.id, propertyId);
+        `, [request.params.id, propertyId]);
         if (!workerMayCheckOut(booking.status, booking.check_out, date, time, Number(invoice?.balance_kobo || 0))) {
           throw Object.assign(new Error("Staff can check out a guest due today after noon, once the balance is paid."), { status: 409 });
         }
       }
-      const room = getRoom(booking.unit_id);
+      const room = await transaction.get(`
+        SELECT units.id, units.number, units.status, units.room_type_id,
+               room_types.base_rate_kobo, room_types.max_guests
+        FROM units JOIN room_types ON room_types.id = units.room_type_id
+        WHERE units.id = ? AND units.property_id = ? AND units.deleted_at IS NULL AND room_types.deleted_at IS NULL
+      `, [booking.unit_id, propertyId]);
       if (status === "checked_in" && !["available", "inspected"].includes(room?.status)) {
         throw Object.assign(new Error("This room is not ready for check-in."), { status: 409 });
       }
@@ -362,92 +401,97 @@ app.patch("/api/reservations/:id/status", (request, response) => {
         throw Object.assign(new Error("This room is out of order."), { status: 409 });
       }
       if (["hold", "confirmed", "checked_in"].includes(status)) {
-        const conflict = database.prepare(`
+        const conflict = await transaction.get(`
           SELECT id FROM bookings
           WHERE unit_id = ? AND id != ? AND deleted_at IS NULL
             AND status IN ('hold', 'confirmed', 'checked_in')
             AND check_in < ? AND check_out > ?
           LIMIT 1
-        `).get(booking.unit_id, request.params.id, booking.check_out, booking.check_in);
-        const block = database.prepare(`
+        `, [booking.unit_id, request.params.id, booking.check_out, booking.check_in]);
+        const block = await transaction.get(`
           SELECT id FROM out_of_order_blocks
           WHERE unit_id = ? AND deleted_at IS NULL
             AND start_date < ? AND end_date > ?
           LIMIT 1
-        `).get(booking.unit_id, booking.check_out, booking.check_in);
+        `, [booking.unit_id, booking.check_out, booking.check_in]);
         if (conflict || block) throw Object.assign(new Error("This reservation no longer fits the room availability."), { status: 409 });
       }
-      database.prepare(`
+      await transaction.run(`
         UPDATE bookings SET status = ?, cancellation_reason = ?,
           checked_in_at = CASE WHEN ? = 'checked_in' THEN CURRENT_TIMESTAMP ELSE checked_in_at END,
           checked_out_at = CASE WHEN ? = 'checked_out' THEN CURRENT_TIMESTAMP ELSE checked_out_at END,
           updated_at = CURRENT_TIMESTAMP
         WHERE id = ? AND property_id = ?
-      `).run(status, status === "cancelled" ? String(reason).trim() : null,
-        status, status, request.params.id, propertyId);
+      `, [status, status === "cancelled" ? String(reason).trim() : null,
+        status, status, request.params.id, propertyId]);
       if (status === "checked_in" || status === "checked_out") {
         const roomBefore = room;
-        database.prepare(`
+        await transaction.run(`
           UPDATE units SET status = ?, updated_at = CURRENT_TIMESTAMP
           WHERE id = ? AND property_id = ? AND deleted_at IS NULL
-        `).run(status === "checked_in" ? "occupied" : "dirty", booking.unit_id, propertyId);
-        writeAudit(request, "room", booking.unit_id, "status_changed", roomBefore, getRoom(booking.unit_id));
+        `, [status === "checked_in" ? "occupied" : "dirty", booking.unit_id, propertyId]);
+        const roomAfter = await transaction.get(`
+          SELECT units.id, units.number, units.status, units.room_type_id,
+                 room_types.base_rate_kobo, room_types.max_guests
+          FROM units JOIN room_types ON room_types.id = units.room_type_id
+          WHERE units.id = ? AND units.property_id = ?
+        `, [booking.unit_id, propertyId]);
+        await writeAudit(request, "room", booking.unit_id, "status_changed", roomBefore, roomAfter, transaction);
       }
       let housekeepingTask = null;
       if (status === "checked_out" && booking.status !== "checked_out") {
-        const nextArrival = database.prepare(`
+        const nextArrival = await transaction.get(`
           SELECT id FROM bookings WHERE unit_id = ? AND check_in = ?
             AND status IN ('hold', 'confirmed') AND deleted_at IS NULL LIMIT 1
-        `).get(booking.unit_id, booking.check_out);
+        `, [booking.unit_id, booking.check_out]);
         const taskId = `HK-${crypto.randomUUID()}`;
-        database.prepare(`
+        await transaction.run(`
           INSERT INTO housekeeping_tasks (
             id, property_id, unit_id, booking_id, type, status, priority,
             assigned_to_label, created_at, updated_at
           ) VALUES (?, ?, ?, ?, 'Checkout clean', 'open', ?, 'Unassigned', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        `).run(taskId, propertyId, booking.unit_id, request.params.id, nextArrival ? "high" : "medium");
-        housekeepingTask = database.prepare("SELECT * FROM housekeeping_tasks WHERE id = ?").get(taskId);
+        `, [taskId, propertyId, booking.unit_id, request.params.id, nextArrival ? "high" : "medium"]);
+        housekeepingTask = await transaction.get("SELECT * FROM housekeeping_tasks WHERE id = ?", [taskId]);
       }
       const refunds = [];
       if (status === "cancelled" && requestedRefund > 0) {
         let remaining = requestedRefund;
-        const originalPayments = database.prepare(`
+        const originalPayments = await transaction.all(`
           SELECT * FROM payments
           WHERE booking_id = ? AND property_id = ? AND amount_kobo > 0
             AND status IN ('paid', 'part_refunded') AND deleted_at IS NULL
           ORDER BY created_at DESC
-        `).all(request.params.id, propertyId);
+        `, [request.params.id, propertyId]);
         for (const payment of originalPayments) {
-          const alreadyRefunded = database.prepare(`
+          const alreadyRefundedRow = await transaction.get(`
             SELECT COALESCE(sum(-amount_kobo), 0) AS amount
             FROM payments WHERE original_payment_id = ? AND status = 'refunded' AND deleted_at IS NULL
-          `).get(payment.id).amount;
+          `, [payment.id]);
+          const alreadyRefunded = Number(alreadyRefundedRow.amount);
           const amount = Math.min(remaining, payment.amount_kobo - alreadyRefunded);
           if (amount <= 0) continue;
           const refundId = `PAY-${crypto.randomUUID()}`;
-          database.prepare(`
+          await transaction.run(`
             INSERT INTO payments (
               id, property_id, booking_id, invoice_id, method, amount_kobo,
               reference, status, original_payment_id, paid_at, created_at, updated_at
             ) VALUES (?, ?, ?, ?, 'refund', ?, ?, 'refunded', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          `).run(refundId, propertyId, request.params.id, payment.invoice_id, -amount, `REF-${crypto.randomUUID()}`, payment.id);
+          `, [refundId, propertyId, request.params.id, payment.invoice_id, -amount, `REF-${crypto.randomUUID()}`, payment.id]);
           const newRefundedTotal = alreadyRefunded + amount;
-          database.prepare("UPDATE payments SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-            .run(newRefundedTotal >= payment.amount_kobo ? "refunded" : "part_refunded", payment.id);
-          refunds.push(database.prepare("SELECT * FROM payments WHERE id = ?").get(refundId));
+          await transaction.run("UPDATE payments SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [newRefundedTotal >= payment.amount_kobo ? "refunded" : "part_refunded", payment.id]);
+          refunds.push(await transaction.get("SELECT * FROM payments WHERE id = ?", [refundId]));
           remaining -= amount;
           if (remaining === 0) break;
         }
         if (remaining > 0) throw Object.assign(new Error("Refund exceeds collected database payments."), { status: 409 });
-        const invoice = database.prepare("SELECT id, paid_kobo FROM invoices WHERE booking_id = ? AND property_id = ? AND deleted_at IS NULL").get(request.params.id, propertyId);
-        if (invoice) database.prepare("UPDATE invoices SET paid_kobo = ?, status = 'issued', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-          .run(Math.max(0, invoice.paid_kobo - requestedRefund), invoice.id);
+        const invoice = await transaction.getForUpdate("SELECT id, paid_kobo FROM invoices WHERE booking_id = ? AND property_id = ? AND deleted_at IS NULL", [request.params.id, propertyId]);
+        if (invoice) await transaction.run("UPDATE invoices SET paid_kobo = ?, status = 'issued', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [Math.max(0, Number(invoice.paid_kobo) - requestedRefund), invoice.id]);
         for (const refund of refunds) {
-          writeAudit(request, "payment", refund.id, "cancel_refund", null, refund);
+          await writeAudit(request, "payment", refund.id, "cancel_refund", null, refund, transaction);
         }
       }
-      const updatedBooking = database.prepare("SELECT * FROM bookings WHERE id = ? AND property_id = ?").get(request.params.id, propertyId);
-      writeAudit(request, "reservation", request.params.id, status, booking, updatedBooking);
+      const updatedBooking = await transaction.get("SELECT * FROM bookings WHERE id = ? AND property_id = ?", [request.params.id, propertyId]);
+      await writeAudit(request, "reservation", request.params.id, status, booking, updatedBooking, transaction);
       return {
         id: request.params.id,
         status,
@@ -466,14 +510,14 @@ app.patch("/api/reservations/:id/status", (request, response) => {
         })),
       };
     });
-    response.json(update.immediate());
+    response.json(result);
   } catch (error) {
     sendError(response, error);
   }
 });
 
-function validateReservation(input, existingId = null) {
-  const room = getRoom(input.unitId);
+async function validateReservation(input, existingId = null, connection = database) {
+  const room = await getRoom(input.unitId, connection);
   if (!room) throw Object.assign(new Error("Choose a room from the active room list."), { status: 400 });
   if (room.status === "out_of_order") throw Object.assign(new Error("This room is out of order and cannot be reserved."), { status: 409 });
   const checkIn = String(input.checkIn || "");
@@ -486,14 +530,14 @@ function validateReservation(input, existingId = null) {
     throw Object.assign(new Error("Each room accommodates a maximum of 3 guests."), { status: 400 });
   }
   if (!room.base_rate_kobo) throw Object.assign(new Error("Set this room's nightly rate before booking."), { status: 409 });
-  const conflict = findBookingConflict(database, input.unitId, checkIn, checkOut, existingId);
+  const conflict = await findBookingConflictAsync(connection, input.unitId, checkIn, checkOut, existingId);
   if (conflict) throw Object.assign(new Error("This room already has a reservation during those dates."), { status: 409 });
-  const blocked = database.prepare(`
+  const blocked = await connection.get(`
     SELECT id FROM out_of_order_blocks
     WHERE unit_id = ? AND deleted_at IS NULL
       AND start_date < ? AND end_date > ?
     LIMIT 1
-  `).get(input.unitId, checkOut, checkIn);
+  `, [input.unitId, checkOut, checkIn]);
   if (blocked) throw Object.assign(new Error("This room is blocked during those dates."), { status: 409 });
   const subtotalKobo = room.base_rate_kobo * nights;
   const discountKobo = Math.max(0, Math.round(Number(input.discountKobo || 0)));
@@ -514,23 +558,23 @@ function validateReservation(input, existingId = null) {
   };
 }
 
-function saveReservation(input, request, existingId = null) {
+async function saveReservation(input, request, existingId = null) {
   const reservationId = existingId || `BA-B${Date.now()}-${crypto.randomBytes(2).toString("hex")}`;
-  const run = database.transaction(() => {
+  return database.withTransaction(async (transaction) => {
     const before = existingId
-      ? database.prepare("SELECT * FROM bookings WHERE id = ? AND property_id = ? AND deleted_at IS NULL").get(existingId, propertyId)
+      ? await transaction.getForUpdate("SELECT * FROM bookings WHERE id = ? AND property_id = ? AND deleted_at IS NULL", [existingId, propertyId])
       : null;
-    const quote = validateReservation(input, existingId);
+    const quote = await validateReservation(input, existingId, transaction);
     const guest = input.guest;
     if (!guest?.name || !guest?.phone) throw Object.assign(new Error("Guest name and phone are required."), { status: 400 });
     const guestId = String(input.guestId || guest.id || `guest_${crypto.randomUUID()}`);
-    database.prepare(`
+    await transaction.run(`
       INSERT OR IGNORE INTO guests (
         id, property_id, full_name, phone, email, nationality, id_number,
         loyalty_tier, points, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `).run(guestId, propertyId, guest.name, guest.phone, guest.email || null,
-      guest.nationality || null, guest.idNumber || null, guest.tier || "Silver", Number(guest.points || 0));
+    `, [guestId, propertyId, guest.name, guest.phone, guest.email || null,
+      guest.nationality || null, guest.idNumber || null, guest.tier || "Silver", Number(guest.points || 0)]);
     const status = ["hold", "confirmed"].includes(input.status) ? input.status : "confirmed";
     const values = [
       input.unitId, quote.room.room_type_id, input.checkIn, input.checkOut,
@@ -540,59 +584,58 @@ function saveReservation(input, request, existingId = null) {
       quote.serviceKobo, quote.totalKobo,
     ];
     if (existingId) {
-      const result = database.prepare(`
+      const result = await transaction.run(`
         UPDATE bookings SET unit_id = ?, room_type_id = ?, check_in = ?, check_out = ?,
           nights = ?, adults = ?, children = ?, status = ?, source = ?, requests = ?,
           rate_kobo = ?, subtotal_kobo = ?, discount_kobo = ?, vat_kobo = ?,
           service_kobo = ?, total_kobo = ?, guest_id = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ? AND property_id = ? AND deleted_at IS NULL
-      `).run(...values, guestId, existingId, propertyId);
+      `, [...values, guestId, existingId, propertyId]);
       if (!result.changes) throw Object.assign(new Error("Reservation not found."), { status: 404 });
-      database.prepare(`
+      await transaction.run(`
         UPDATE invoices SET total_kobo = ?,
           status = CASE WHEN paid_kobo >= ? THEN 'paid' ELSE 'issued' END,
           updated_at = CURRENT_TIMESTAMP
         WHERE booking_id = ? AND property_id = ? AND deleted_at IS NULL
-      `).run(quote.totalKobo, quote.totalKobo, existingId, propertyId);
+      `, [quote.totalKobo, quote.totalKobo, existingId, propertyId]);
     } else {
-      database.prepare(`
+      await transaction.run(`
         INSERT INTO bookings (
           id, property_id, guest_id, unit_id, room_type_id, check_in, check_out,
           nights, adults, children, status, source, requests, rate_kobo,
           subtotal_kobo, discount_kobo, vat_kobo, service_kobo, total_kobo,
           created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).run(reservationId, propertyId, guestId, ...values);
-      database.prepare(`
+      `, [reservationId, propertyId, guestId, ...values]);
+      await transaction.run(`
         INSERT INTO invoices (
           id, property_id, booking_id, number, issue_date, due_date,
           total_kobo, paid_kobo, status, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'draft', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).run(`INV-${crypto.randomUUID()}`, propertyId, reservationId,
-        `BA-INV-${reservationId}`, input.checkIn, input.checkIn, quote.totalKobo);
+      `, [`INV-${crypto.randomUUID()}`, propertyId, reservationId,
+        `BA-INV-${reservationId}`, input.checkIn, input.checkIn, quote.totalKobo]);
     }
-    const saved = database.prepare("SELECT * FROM bookings WHERE id = ? AND property_id = ?").get(reservationId, propertyId);
-    writeAudit(request, "reservation", reservationId, existingId ? "updated" : "created", before, saved);
+    const saved = await transaction.get("SELECT * FROM bookings WHERE id = ? AND property_id = ?", [reservationId, propertyId]);
+    await writeAudit(request, "reservation", reservationId, existingId ? "updated" : "created", before, saved, transaction);
     return reservationId;
   });
-  return run.immediate();
 }
 
-app.post("/api/reservations", (request, response) => {
+app.post("/api/reservations", async (request, response) => {
   try {
-    const id = saveReservation(request.body, request);
+    const id = await saveReservation(request.body, request);
     response.status(201).json({ id });
   } catch (error) {
     sendError(response, error);
   }
 });
 
-app.put("/api/reservations/:id", (request, response) => {
+app.put("/api/reservations/:id", async (request, response) => {
   if (!['manager', 'ceo'].includes(request.user.role)) {
     return response.status(403).json({ error: "Only a manager or admin can edit reservations." });
   }
   try {
-    const id = saveReservation(request.body, request, request.params.id);
+    const id = await saveReservation(request.body, request, request.params.id);
     response.json({ id });
   } catch (error) {
     sendError(response, error);
@@ -604,6 +647,11 @@ registerFnbRoutes(app, database, propertyId);
 registerWorkspaceRoutes(app, database, propertyId);
 registerReservationWorkflowRoutes(app, database, propertyId);
 
-app.listen(port, "127.0.0.1", () => {
-  console.log(`Boms Apartment API listening on http://127.0.0.1:${port}`);
-});
+const isMainModule = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMainModule) {
+  app.listen(port, "127.0.0.1", () => {
+    console.log(`Boms Apartment API listening on http://127.0.0.1:${port}`);
+  });
+}
+
+export default app;

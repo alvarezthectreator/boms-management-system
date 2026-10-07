@@ -9,14 +9,18 @@
     "build": "vite build",
     "lint": "oxlint",
     "test": "node --test test/*.test.js",
+    "db:migrate:postgres": "node scripts/postgres-migrate.js",
     "db:backup": "node scripts/db-tools.js backup",
     "db:restore": "node scripts/db-tools.js restore",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.117.2",
     "better-sqlite3": "^13.0.3",
     "express": "^5.2.1",
     "lucide-react": "^1.52.0",
+    "pg": "^8.23.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

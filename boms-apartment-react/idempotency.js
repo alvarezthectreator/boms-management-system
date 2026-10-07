@@ -31,3 +31,31 @@ export function saveIdempotency(database, request, propertyId, scope, record, re
     ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `).run(propertyId, request.user.id, scope, record.key, record.requestHash, JSON.stringify(response));
 }
+
+export async function readIdempotencyAsync(database, request, propertyId, scope) {
+  const key = String(request.get("idempotency-key") || "").trim();
+  if (!key || key.length > 128) throw fail("A valid Idempotency-Key header is required.");
+  const requestHash = crypto.createHash("sha256")
+    .update(JSON.stringify(request.body || {}))
+    .digest("hex");
+  const existing = await database.get(`
+    SELECT request_hash, response_json FROM api_idempotency_keys
+    WHERE property_id = ? AND user_id = ? AND scope = ? AND idempotency_key = ?
+  `, [propertyId, request.user.id, scope, key]);
+  if (existing && existing.request_hash !== requestHash) {
+    throw fail("This Idempotency-Key was already used for a different request.", 409);
+  }
+  return {
+    key,
+    requestHash,
+    response: existing ? JSON.parse(existing.response_json) : null,
+  };
+}
+
+export async function saveIdempotencyAsync(database, request, propertyId, scope, record, response) {
+  await database.run(`
+    INSERT INTO api_idempotency_keys (
+      property_id, user_id, scope, idempotency_key, request_hash, response_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `, [propertyId, request.user.id, scope, record.key, record.requestHash, JSON.stringify(response)]);
+}

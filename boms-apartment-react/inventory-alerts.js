@@ -34,3 +34,35 @@ export function syncLowStockNotifications(database, propertyId) {
     }
   }
 }
+
+export async function syncLowStockNotificationsAsync(database, propertyId) {
+  const lowItems = await database.all(`
+    SELECT id, name, qty, min_qty, unit FROM inventory_items
+    WHERE property_id = ? AND deleted_at IS NULL AND qty <= min_qty
+  `, [propertyId]);
+  const lowItemIds = new Set(lowItems.map((item) => item.id));
+  const managers = await database.all(`
+    SELECT id FROM users WHERE property_id = ? AND role IN ('manager', 'ceo')
+      AND active = 1 AND deleted_at IS NULL
+  `, [propertyId]);
+  const existingLowAlerts = await database.all(`
+    SELECT id, type FROM notifications WHERE property_id = ? AND type LIKE 'low_stock:%' AND deleted_at IS NULL
+  `, [propertyId]);
+  for (const notification of existingLowAlerts) {
+    if (!lowItemIds.has(notification.type.slice("low_stock:".length))) {
+      await database.run("UPDATE notifications SET read_at = COALESCE(read_at, CURRENT_TIMESTAMP), deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [notification.id]);
+    }
+  }
+  for (const item of lowItems) {
+    const type = `low_stock:${item.id}`;
+    for (const manager of managers) {
+      const exists = await database.get("SELECT id FROM notifications WHERE property_id = ? AND user_id = ? AND type = ? AND deleted_at IS NULL LIMIT 1", [propertyId, manager.id, type]);
+      if (exists) continue;
+      const message = `${item.name} is at ${item.qty} ${item.unit}; minimum level is ${item.min_qty} ${item.unit}.`;
+      await database.run(`
+        INSERT INTO notifications (id, property_id, user_id, type, title, body, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [`NOT-${crypto.randomUUID()}`, propertyId, manager.id, type, `Low stock: ${item.name}`, message]);
+    }
+  }
+}
