@@ -4,12 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"node server.js\" \"vite\"",
+    "dev": "concurrently -k \"node --env-file=.env.local server.js\" \"vite\"",
     "start:api": "node server.js",
     "build": "vite build",
     "lint": "oxlint",
     "test": "node --test test/*.test.js",
-    "db:migrate:postgres": "node scripts/postgres-migrate.js",
+    "db:migrate:postgres": "node --env-file=.env.local scripts/postgres-migrate.js",
     "db:backup": "node scripts/db-tools.js backup",
     "db:restore": "node scripts/db-tools.js restore",
     "preview": "vite preview"
