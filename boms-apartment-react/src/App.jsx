@@ -477,6 +477,7 @@ function InputField({ field, value, onChange }) {
           step={field.step || (field.type === "number" ? "any" : undefined)}
           type={field.type || "text"}
           name={field.name}
+          autoComplete={field.autoComplete}
           {...valueProps}
           placeholder={field.placeholder}
           className={base}
@@ -4057,12 +4058,13 @@ function TeamPage({ data, role, onCreate, onSettings, onUserToggle, onSetPasswor
 
 function LoginScreen({ onLogin }) {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   async function submit(event) {
     event.preventDefault();
     setSubmitting(true);
-    const result = await onLogin(email);
+    const result = await onLogin(email, password);
     setError(result?.error || "");
     setSubmitting(false);
   }
@@ -4094,7 +4096,8 @@ function LoginScreen({ onLogin }) {
             Continue to the operations dashboard.
           </p>
           <form onSubmit={submit} className="mt-6 space-y-4">
-            <InputField field={{ name: "email", label: "Username", type: "email" }} value={email} onChange={(event) => setEmail(event.target.value)} />
+            <InputField field={{ name: "email", label: "Username", type: "email", autoComplete: "username" }} value={email} onChange={(event) => setEmail(event.target.value)} />
+            <InputField field={{ name: "password", label: "Password", type: "password", autoComplete: "current-password" }} value={password} onChange={(event) => setPassword(event.target.value)} />
             {error && (
               <p role="alert" className="text-sm text-rose-700">
                 {error}
@@ -4105,7 +4108,7 @@ function LoginScreen({ onLogin }) {
             </Button>
           </form>
           <p className="mt-5 rounded-lg bg-[#f4f7f4] p-3 text-xs leading-5 text-[#718078]">
-            Sign in with your registered username. No password is required for this temporary setup.
+            Sign in with your registered username and password.
           </p>
         </Panel>
         <p className="mt-4 text-center text-xs text-[#839087]">
@@ -4649,12 +4652,12 @@ function App() {
       notify(error.message);
     }
   }
-  async function signIn(username) {
+  async function signIn(username, password) {
     try {
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: username }),
+        body: JSON.stringify({ email: username, password }),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) return { error: result.error || "Sign in failed." };

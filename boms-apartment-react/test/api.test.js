@@ -546,16 +546,20 @@ test("daily close uses persisted receipts and enforces manager access", async ()
   database.close();
 });
 
-test("username login creates an HttpOnly session without a password", async () => {
+test("login requires a valid password and creates an HttpOnly session", async () => {
   const database = createTestDatabase();
   const app = createRouteApp();
   database.prepare("INSERT INTO users (id, property_id, name, email, role, password_hash, active) VALUES ('worker-1', ?, 'Front Desk', 'desk@example.test', 'worker', ?, 1)")
     .run(propertyId, hashPassword("unused-password"));
   registerAuthRoutes(app, database, propertyId);
 
-  const invalid = await app.call("POST", "/api/auth/login", { body: { email: "unknown@example.test" } });
+  const invalid = await app.call("POST", "/api/auth/login", { body: { email: "unknown@example.test", password: "anything" } });
   assert.equal(invalid.code, 401);
-  const login = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "anything" } });
+  const missingPassword = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test" } });
+  assert.equal(missingPassword.code, 401);
+  const wrongPassword = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "wrong-password" } });
+  assert.equal(wrongPassword.code, 401);
+  const login = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "unused-password" } });
   assert.equal(login.code, 200);
   assert.match(login.headers["set-cookie"], /HttpOnly/);
   assert.match(login.headers["set-cookie"], /SameSite=Strict/);

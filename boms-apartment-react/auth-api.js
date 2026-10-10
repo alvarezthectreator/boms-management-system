@@ -74,13 +74,14 @@ async function applyRoleFiltering(database, propertyId, user) {
 export function registerAuthRoutes(app, database, propertyId) {
   app.post("/api/auth/login", async (request, response) => {
     const email = normalizeEmail(request.body.email);
+    const password = String(request.body.password || "");
     const now = Date.now();
     const user = await database.get(`
-      SELECT id, name, email, role FROM users
+      SELECT id, name, email, role, password_hash FROM users
       WHERE property_id = ? AND lower(email) = ? AND active = 1 AND deleted_at IS NULL
     `, [propertyId, email]);
-    if (!user) {
-      return response.status(401).json({ error: "Username is not registered." });
+    if (!user || password.length > 1024 || !verifyPassword(password, user.password_hash)) {
+      return response.status(401).json({ error: "Invalid username or password." });
     }
 
     const token = crypto.randomBytes(32).toString("base64url");
