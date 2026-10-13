@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import serverApp from "../server.js";
 import { createAuthMiddleware, hashPassword, registerAuthRoutes, verifyPassword } from "../auth-api.js";
 import { registerFnbRoutes } from "../fnb-api.js";
 import { syncLowStockNotifications } from "../inventory-alerts.js";
@@ -10,6 +11,21 @@ import { registerPublicWebsiteRoutes } from "../public-website-api.js";
 import { createRouteApp, createTestDatabase, seedFnb } from "./helpers.js";
 
 const propertyId = "property_boms";
+
+test("dashboard routes resolve to the app shell instead of 404ing", async () => {
+  const server = serverApp.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  const { port } = server.address();
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/dashboard`);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /Boms Apartment|<title>/i);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
 
 test("public website lists room types without exposing unit occupancy", async () => {
   const database = createTestDatabase();

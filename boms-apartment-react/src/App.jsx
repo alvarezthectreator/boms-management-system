@@ -4085,7 +4085,7 @@ function LoginScreen({ onLogin }) {
             </Button>
           </form>
           <p className="mt-5 rounded-lg bg-[#f4f7f4] p-3 text-xs leading-5 text-[#718078]">
-            Use the password assigned to your staff account. Ask a manager or CEO to reset it if needed.
+            Demo access: <strong className="font-semibold text-[#1d2b24]">demo@boms.local</strong> / <strong className="font-semibold text-[#1d2b24]">password</strong>
           </p>
         </Panel>
         <p className="mt-4 text-center text-xs text-[#839087]">
@@ -4139,6 +4139,16 @@ function AuditPage({ data }) {
   );
 }
 
+const DEMO_LOGIN = {
+  email: "demo@boms.local",
+  password: "password",
+  user: {
+    id: "demo-user",
+    name: "Demo Manager",
+    role: "ceo",
+  },
+};
+
 function App() {
   const [data, setData] = useState(readDemoData);
   const initialData = useRef(data);
@@ -4165,6 +4175,19 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+    const savedSession = localStorage.getItem("boms-demo-session");
+    if (savedSession) {
+      try {
+        const session = JSON.parse(savedSession);
+        if (!cancelled && session?.user) {
+          setCurrentUserId(session.user.id);
+          setRole(session.user.role);
+          setSignedIn(true);
+        }
+      } catch {
+        localStorage.removeItem("boms-demo-session");
+      }
+    }
     fetch("/api/auth/me")
       .then(async (response) => response.ok ? response.json() : null)
       .then((result) => {
@@ -4668,6 +4691,19 @@ function App() {
     }
   }
   async function signIn(email, password) {
+    const normalisedEmail = String(email || "").trim().toLowerCase();
+    const normalisedPassword = String(password || "");
+    if (normalisedEmail === DEMO_LOGIN.email && normalisedPassword === DEMO_LOGIN.password) {
+      const user = DEMO_LOGIN.user;
+      setCurrentUserId(user.id);
+      setRole(user.role);
+      setSignedIn(true);
+      setIsPropertyWebsite(false);
+      setPage("dashboard");
+      localStorage.setItem("boms-demo-session", JSON.stringify({ user }));
+      window.history.replaceState({}, "", appRoutes.dashboard);
+      return {};
+    }
     try {
       const response = await fetch("/api/auth/login", {
         method: "POST",
@@ -4689,6 +4725,7 @@ function App() {
   }
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    localStorage.removeItem("boms-demo-session");
     setSignedIn(false);
     setCurrentUserId("");
     setRole("worker");

@@ -665,6 +665,25 @@ registerFnbRoutes(app, database, propertyId);
 registerWorkspaceRoutes(app, database, propertyId);
 registerReservationWorkflowRoutes(app, database, propertyId);
 
+const publicDir = path.join(root, "public");
+const distDir = path.join(root, "dist");
+const rootIndexFile = path.join(root, "index.html");
+
+if (fs.existsSync(publicDir)) {
+  app.use(express.static(publicDir));
+}
+if (fs.existsSync(distDir)) {
+  app.use(express.static(distDir));
+}
+
+app.get(/^(?!\/api\/).*$/, (request, response, next) => {
+  if (request.path.includes(".")) return next();
+  const target = fs.existsSync(path.join(distDir, "index.html"))
+    ? path.join(distDir, "index.html")
+    : rootIndexFile;
+  return response.sendFile(target);
+});
+
 const isMainModule = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMainModule) {
   app.listen(port, "127.0.0.1", () => {
