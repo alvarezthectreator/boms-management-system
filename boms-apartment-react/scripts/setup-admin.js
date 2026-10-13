@@ -3,11 +3,14 @@ import { stdin, stdout } from "node:process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
+import pg from "pg";
 import { hashPassword } from "../auth-api.js";
 
+const { Pool } = pg;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const databasePath = path.resolve(process.env.BOMS_DB_PATH || path.join(root, "data", "boms.sqlite"));
-const database = new Database(databasePath);
+const postgresMode = Boolean(process.env.DATABASE_URL);
+const database = postgresMode ? new Pool({ connectionString: process.env.DATABASE_URL }) : new Database(databasePath);
 const rl = readline.createInterface({ input: stdin, output: stdout });
 
 function readHidden(prompt) {
@@ -35,16 +38,24 @@ function readHidden(prompt) {
 
 try {
   const email = (await rl.question("CEO email: ")).trim().toLowerCase();
-  const users = database.prepare("SELECT id, name, email FROM users WHERE property_id = 'property_boms' AND role = 'ceo' AND active = 1 AND deleted_at IS NULL").all();
-  let user = users.find((candidate) => candidate.email.toLowerCase() === email);
+  const users = postgresMode
+    ? (await database.query("SELECT id, name, email FROM users WHERE property_id = 'property_boms' AND role = 'ceo' AND active = 1 AND deleted_at IS NULL")).rows
+    : database.prepare("SELECT id, name, email FROM users WHERE property_id = 'property_boms' AND role = 'ceo' AND active = 1 AND deleted_at IS NULL").all();
+  let user = users.find((candidate) => String(candidate.email || "").toLowerCase() === email);
   if (!user && users.length === 1 && !users[0].email) user = users[0];
   if (!user) throw new Error("No active CEO account matches that email. Create/seed the CEO account before setup.");
   const password = await readHidden("New password (minimum 12 characters): ");
   if (password.length < 12) throw new Error("Password must be at least 12 characters.");
-  database.prepare("UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(hashPassword(password), user.id);
-  database.prepare("DELETE FROM auth_sessions WHERE user_id = ?").run(user.id);
+  if (postgresMode) {
+    await database.query("UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", [hashPassword(password), user.id]);
+    await database.query("DELETE FROM auth_sessions WHERE user_id = $1", [user.id]);
+  } else {
+    database.prepare("UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(hashPassword(password), user.id);
+    database.prepare("DELETE FROM auth_sessions WHERE user_id = ?").run(user.id);
+  }
   console.log(`Password set for ${user.email}. Sign in at http://localhost:5173/.`);
 } finally {
   rl.close();
-  database.close();
+  if (postgresMode) await database.end();
+  else database.close();
 }

@@ -13,6 +13,10 @@ export function createTestDatabase() {
       id TEXT PRIMARY KEY, property_id TEXT, user_id TEXT, token_hash TEXT UNIQUE,
       created_at TEXT, expires_at TEXT
     );
+    CREATE TABLE auth_login_attempts (
+      ip_hash TEXT PRIMARY KEY, failed_attempts INTEGER DEFAULT 0,
+      window_started_at TEXT, locked_until TEXT, updated_at TEXT
+    );
     CREATE TABLE api_idempotency_keys (
       property_id TEXT, user_id TEXT, scope TEXT, idempotency_key TEXT,
       request_hash TEXT, response_json TEXT, created_at TEXT,
@@ -21,6 +25,11 @@ export function createTestDatabase() {
     CREATE TABLE notifications (
       id TEXT PRIMARY KEY, property_id TEXT, user_id TEXT, type TEXT, title TEXT,
       body TEXT, read_at TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT
+    );
+    CREATE TABLE restock_requests (
+      id TEXT PRIMARY KEY, property_id TEXT, requested_by TEXT, status TEXT,
+      items_json TEXT, manager_note TEXT, created_at TEXT, updated_at TEXT,
+      resolved_at TEXT, resolved_by TEXT
     );
     CREATE TABLE audit_logs (
       id TEXT PRIMARY KEY, property_id TEXT, user_id TEXT, entity TEXT, entity_id TEXT,
@@ -42,7 +51,14 @@ export function createTestDatabase() {
       PRIMARY KEY (property_id, key)
     );
     CREATE TABLE guests (id TEXT PRIMARY KEY, property_id TEXT, full_name TEXT, deleted_at TEXT);
-    CREATE TABLE units (id TEXT PRIMARY KEY, property_id TEXT, number TEXT, deleted_at TEXT);
+    CREATE TABLE room_types (
+      id TEXT PRIMARY KEY, property_id TEXT, name TEXT, size_m2 REAL, bed_type TEXT,
+      max_guests INTEGER, description TEXT, base_rate_kobo INTEGER, photos_json TEXT,
+      deleted_at TEXT
+    );
+    CREATE TABLE units (
+      id TEXT PRIMARY KEY, property_id TEXT, number TEXT, room_type_id TEXT, deleted_at TEXT
+    );
     CREATE TABLE out_of_order_blocks (
       id TEXT PRIMARY KEY, property_id TEXT, unit_id TEXT, start_date TEXT,
       end_date TEXT, deleted_at TEXT

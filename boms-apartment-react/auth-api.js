@@ -2,6 +2,10 @@ import crypto from "node:crypto";
 
 const sessionCookie = "boms_session";
 const sessionDurationMs = 12 * 60 * 60 * 1000;
+const loginWindowMs = 15 * 60 * 1000;
+const loginLockMs = 15 * 60 * 1000;
+const maxLoginFailures = 5;
+const dummyPasswordHash = hashPassword(crypto.randomUUID());
 
 export function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString("hex");
@@ -12,6 +16,7 @@ export function hashPassword(password) {
 export function verifyPassword(password, storedHash) {
   const [algorithm, salt, expectedHex] = String(storedHash || "").split("$");
   if (algorithm !== "scrypt" || !salt || !/^[a-f\d]{128}$/i.test(expectedHex || "")) return false;
+  if (typeof password !== "string" || password.length > 1024) return false;
   const expected = Buffer.from(expectedHex, "hex");
   const actual = crypto.scryptSync(password, salt, expected.length);
   return crypto.timingSafeEqual(actual, expected);
@@ -25,6 +30,10 @@ function readCookie(request, name) {
 
 function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function hashClientAddress(address) {
+  return crypto.createHash("sha256").update(String(address || "unknown")).digest("hex");
 }
 
 async function findSessionUser(database, propertyId, token) {
@@ -54,7 +63,7 @@ export function requireAuthenticatedUser(database, propertyId) {
 }
 
 function setSessionCookie(response, request, token, maxAge) {
-  const secure = request.secure || request.get("x-forwarded-proto") === "https";
+  const secure = process.env.NODE_ENV === "production" || request.secure || request.get("x-forwarded-proto") === "https";
   response.setHeader("Set-Cookie", `${sessionCookie}=${encodeURIComponent(token)}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? "; Secure" : ""}`);
 }
 
@@ -74,15 +83,41 @@ async function applyRoleFiltering(database, propertyId, user) {
 export function registerAuthRoutes(app, database, propertyId) {
   app.post("/api/auth/login", async (request, response) => {
     const email = normalizeEmail(request.body.email);
-    const password = String(request.body.password || "");
+    const password = typeof request.body.password === "string" ? request.body.password : "";
+    const addressHash = hashClientAddress(request.ip);
     const now = Date.now();
+    const attempt = await database.get("SELECT locked_until FROM auth_login_attempts WHERE ip_hash = ?", [addressHash]);
+    if (attempt?.locked_until && Date.parse(attempt.locked_until) > now) {
+      return response.status(429).json({ error: "Too many sign-in attempts. Try again later." });
+    }
     const user = await database.get(`
       SELECT id, name, email, role, password_hash FROM users
       WHERE property_id = ? AND lower(email) = ? AND active = 1 AND deleted_at IS NULL
     `, [propertyId, email]);
-    if (!user || password.length > 1024 || !verifyPassword(password, user.password_hash)) {
-      return response.status(401).json({ error: "Invalid username or password." });
+    const passwordMatches = verifyPassword(password, user?.password_hash || dummyPasswordHash);
+    if (!user || !passwordMatches) {
+      const nowIso = new Date(now).toISOString();
+      const cutoffIso = new Date(now - loginWindowMs).toISOString();
+      const lockedUntil = new Date(now + loginLockMs).toISOString();
+      await database.run(`
+        INSERT INTO auth_login_attempts (ip_hash, failed_attempts, window_started_at, locked_until, updated_at)
+        VALUES (?, 1, ?, NULL, ?)
+        ON CONFLICT(ip_hash) DO UPDATE SET
+          failed_attempts = CASE WHEN auth_login_attempts.window_started_at <= ? THEN 1 ELSE auth_login_attempts.failed_attempts + 1 END,
+          window_started_at = CASE WHEN auth_login_attempts.window_started_at <= ? THEN excluded.window_started_at ELSE auth_login_attempts.window_started_at END,
+          locked_until = CASE
+            WHEN (CASE WHEN auth_login_attempts.window_started_at <= ? THEN 1 ELSE auth_login_attempts.failed_attempts + 1 END) >= ? THEN ?
+            ELSE NULL
+          END,
+          updated_at = excluded.updated_at
+      `, [addressHash, nowIso, nowIso, cutoffIso, cutoffIso, cutoffIso, maxLoginFailures, lockedUntil]);
+      const failureState = await database.get("SELECT failed_attempts FROM auth_login_attempts WHERE ip_hash = ?", [addressHash]);
+      const locked = Number(failureState.failed_attempts) >= maxLoginFailures;
+      return response.status(locked ? 429 : 401).json({
+        error: locked ? "Too many sign-in attempts. Try again later." : "Email or password is incorrect.",
+      });
     }
+    await database.run("DELETE FROM auth_login_attempts WHERE ip_hash = ?", [addressHash]);
 
     const token = crypto.randomBytes(32).toString("base64url");
     const expiresAt = new Date(now + sessionDurationMs).toISOString().replace("T", " ").slice(0, 19);

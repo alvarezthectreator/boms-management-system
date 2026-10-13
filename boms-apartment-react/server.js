@@ -10,6 +10,7 @@ import { registerFnbRoutes } from "./fnb-api.js";
 import { registerWorkspaceRoutes } from "./workspace-api.js";
 import { getLagosDateTime, registerReservationWorkflowRoutes, workerMayCheckOut } from "./reservation-workflow-api.js";
 import { createAuthMiddleware, registerAuthRoutes } from "./auth-api.js";
+import { registerPublicWebsiteRoutes } from "./public-website-api.js";
 import { createPostgresDatabase, createPostgresPool } from "./postgres-db.js";
 import { supabaseSessionMiddleware } from "./utils/supabase/middleware.js";
 
@@ -58,11 +59,19 @@ if (postgresMode) {
   database.exec(fs.readFileSync(path.join(root, "db", "008_auth_sessions.sql"), "utf8"));
   database.exec(fs.readFileSync(path.join(root, "db", "009_idempotency.sql"), "utf8"));
   database.exec(fs.readFileSync(path.join(root, "db", "010_audit_append_only.sql"), "utf8"));
+  database.exec(fs.readFileSync(path.join(root, "db", "011_restock_requests.sql"), "utf8"));
+}
+if (postgresMode) {
+  await database.query(fs.readFileSync(path.join(root, "db", "011_restock_requests_postgres.sql"), "utf8"));
 }
 
 const app = express();
 const port = Number(process.env.API_PORT || 3001);
 const propertyId = "property_boms";
+const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0);
+if (!Number.isInteger(trustProxyHops) || trustProxyHops < 0) throw new Error("TRUST_PROXY_HOPS must be a non-negative integer.");
+app.set("trust proxy", trustProxyHops);
+app.disable("x-powered-by");
 if (!postgresMode) {
   database.exec("CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
 }
@@ -75,7 +84,16 @@ if (!postgresMode && !database.prepare("SELECT name FROM app_migrations WHERE na
   });
 }
 app.use(express.json({ limit: "7mb" }));
+app.use((_request, response, next) => {
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("X-Frame-Options", "DENY");
+  response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  response.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  if (process.env.NODE_ENV === "production") response.setHeader("Strict-Transport-Security", "max-age=15552000");
+  next();
+});
 app.use("/api/room-images", express.static(path.join(root, "public", "room-images")));
+registerPublicWebsiteRoutes(app, database, propertyId);
 app.use("/api", (request, response, next) => {
   if (request.headers.cookie?.includes("sb_")) {
     return supabaseSessionMiddleware(request, response, next);

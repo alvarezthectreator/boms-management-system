@@ -330,6 +330,7 @@ export function registerFnbRoutes(app, database, propertyId) {
         const idempotency = await readIdempotencyAsync(transaction, request, propertyId, "fnb-order:create");
         if (idempotency.response) return { replay: true, result: idempotency.response };
         let booking = null;
+        let roomUnitId = "";
         if (paymentMethod === "room_charge") {
           booking = await transaction.get(`
             SELECT bookings.*, guests.full_name, units.id AS room_id
@@ -339,6 +340,11 @@ export function registerFnbRoutes(app, database, propertyId) {
               AND bookings.deleted_at IS NULL
           `, [bookingId, propertyId]);
           if (!booking || (unitId && booking.unit_id !== unitId)) throw problem("Room charge requires an active checked-in booking for that room.", 409);
+          roomUnitId = booking.unit_id;
+        } else if (unitId) {
+          const room = await transaction.get("SELECT id FROM units WHERE id = ? AND property_id = ? AND deleted_at IS NULL", [unitId, propertyId]);
+          if (!room) throw problem("Select a valid room.", 409);
+          roomUnitId = room.id;
         }
         const itemSnapshots = [];
         let subtotal = 0;
@@ -388,7 +394,7 @@ export function registerFnbRoutes(app, database, propertyId) {
             guest_name, payment_method, subtotal_kobo, discount_kobo, service_kobo, tax_kobo,
             total_kobo, notes, created_by_label, created_at, updated_at
           ) VALUES (?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        `, [orderId, propertyId, orderNumber, source, booking?.unit_id || null, booking?.id || null,
+        `, [orderId, propertyId, orderNumber, source, roomUnitId || null, booking?.id || null,
           guestName || booking?.full_name || null, paymentMethod, subtotal, discount, service, tax, total,
           request.body.notes || null, request.user.name]);
         const insertLine = `

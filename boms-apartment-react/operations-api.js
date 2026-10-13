@@ -548,6 +548,124 @@ export function registerOperationsRoutes(app, database, propertyId) {
     response.json(report);
   });
 
+  app.get("/api/restock-requests", async (request, response) => {
+    if (!requireRole(request, response, ["worker", ...managerRoles])) return;
+    const rows = request.user.role === "worker"
+      ? await database.all(`
+          SELECT restock_requests.*, users.name AS requester_name
+          FROM restock_requests JOIN users ON users.id = restock_requests.requested_by
+          WHERE restock_requests.property_id = ? AND restock_requests.requested_by = ?
+          ORDER BY restock_requests.created_at DESC LIMIT 100
+        `, [propertyId, request.user.id])
+      : await database.all(`
+          SELECT restock_requests.*, users.name AS requester_name
+          FROM restock_requests JOIN users ON users.id = restock_requests.requested_by
+          WHERE restock_requests.property_id = ?
+          ORDER BY restock_requests.created_at DESC LIMIT 100
+        `, [propertyId]);
+    response.json(rows.map((row) => ({
+      id: row.id,
+      requestedBy: row.requested_by,
+      requesterName: row.requester_name,
+      status: row.status,
+      items: JSON.parse(row.items_json || "[]"),
+      managerNote: row.manager_note || "",
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    })));
+  });
+
+  app.post("/api/restock-requests", async (request, response) => {
+    if (!requireRole(request, response, ["worker"])) return;
+    try {
+      const result = await database.withTransaction(async (transaction) => {
+        const idempotency = await readIdempotencyAsync(transaction, request, propertyId, "restock-request:create");
+        if (idempotency.response) return { replay: true, result: idempotency.response };
+        const items = await transaction.all(`
+          SELECT id, name, qty, min_qty, unit FROM inventory_items
+          WHERE property_id = ? AND deleted_at IS NULL AND qty <= min_qty
+          ORDER BY name
+        `, [propertyId]);
+        if (!items.length) throw fail("No items currently need restocking.", 409);
+        const requester = await transaction.get("SELECT name FROM users WHERE id = ? AND property_id = ? AND active = 1 AND deleted_at IS NULL", [request.user.id, propertyId]);
+        if (!requester) throw fail("Your staff account is no longer active.", 401);
+        const managers = await transaction.all(`
+          SELECT id FROM users WHERE property_id = ? AND role IN ('manager', 'ceo')
+            AND active = 1 AND deleted_at IS NULL
+        `, [propertyId]);
+        if (!managers.length) throw fail("No active managers can receive this request.", 503);
+
+        const requestId = `RST-${crypto.randomUUID()}`;
+        const itemSnapshot = items.map((item) => ({ id: item.id, name: item.name, quantity: Number(item.qty), minimum: Number(item.min_qty), unit: item.unit }));
+        const itemSummary = itemSnapshot.map((item) => `${item.name} (${item.quantity} ${item.unit}; minimum ${item.minimum} ${item.unit})`).join(", ");
+        const body = `${requester.name || "A worker"} requested restock for: ${itemSummary}.`;
+        await transaction.run(`
+          INSERT INTO restock_requests (id, property_id, requested_by, status, items_json, created_at, updated_at)
+          VALUES (?, ?, ?, 'requested', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `, [requestId, propertyId, request.user.id, JSON.stringify(itemSnapshot)]);
+        for (const manager of managers) {
+          await transaction.run(`
+            INSERT INTO notifications (id, property_id, user_id, type, title, body, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          `, [`NOT-${crypto.randomUUID()}`, propertyId, manager.id, `restock_request:${requestId}`, `Restock requested by ${requester.name || "A worker"}`, body]);
+        }
+        const saved = { id: requestId, requestedBy: request.user.id, requesterName: requester.name, status: "requested", items: itemSnapshot, managerNote: "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+        await saveIdempotencyAsync(transaction, request, propertyId, "restock-request:create", idempotency, saved);
+        return { replay: false, result: saved };
+      });
+      response.status(result.replay ? 200 : 201).json(result.result);
+    } catch (error) {
+      sendError(response, error);
+    }
+  });
+
+  app.patch("/api/restock-requests/:id/status", async (request, response) => {
+    if (!requireRole(request, response, managerRoles)) return;
+    const nextStatus = String(request.body.status || "");
+    const managerNote = String(request.body.managerNote || "").trim();
+    if (managerNote.length > 1000) return response.status(400).json({ error: "Manager notes must be 1000 characters or fewer." });
+    const validNextStatus = { requested: ["reviewing", "declined"], reviewing: ["ordered", "declined"], ordered: ["received", "declined"] };
+    try {
+      const saved = await database.withTransaction(async (transaction) => {
+        const current = await transaction.get(`
+          SELECT restock_requests.*, users.name AS requester_name
+          FROM restock_requests JOIN users ON users.id = restock_requests.requested_by
+          WHERE restock_requests.id = ? AND restock_requests.property_id = ?
+        `, [request.params.id, propertyId]);
+        if (!current) throw fail("Restock request not found.", 404);
+        if (!validNextStatus[current.status]?.includes(nextStatus)) throw fail("That restock request status change is not allowed.", 409);
+        await transaction.run(`
+          UPDATE restock_requests SET status = ?, manager_note = ?,
+            resolved_at = CASE WHEN ? IN ('received', 'declined') THEN CURRENT_TIMESTAMP ELSE resolved_at END,
+            resolved_by = CASE WHEN ? IN ('received', 'declined') THEN ? ELSE resolved_by END,
+            updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?
+        `, [nextStatus, managerNote, nextStatus, nextStatus, request.user.id, current.id, propertyId]);
+        await transaction.run(`
+          UPDATE notifications SET read_at = COALESCE(read_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP
+          WHERE property_id = ? AND user_id = ? AND type = ? AND deleted_at IS NULL
+        `, [propertyId, request.user.id, `restock_request:${current.id}`]);
+        await transaction.run(`
+          INSERT INTO notifications (id, property_id, user_id, type, title, body, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `, [`NOT-${crypto.randomUUID()}`, propertyId, current.requested_by, `restock_update:${current.id}:${crypto.randomUUID()}`, `Restock request ${nextStatus}`, `Your restock request is now ${nextStatus}.${managerNote ? ` Note: ${managerNote}` : ""}`]);
+        await writeAuditAsync(transaction, propertyId, request, "restock_request", current.id, nextStatus, current, { ...current, status: nextStatus, manager_note: managerNote });
+        return {
+          id: current.id,
+          requestedBy: current.requested_by,
+          requesterName: current.requester_name,
+          status: nextStatus,
+          items: JSON.parse(current.items_json || "[]"),
+          managerNote,
+          createdAt: current.created_at,
+          updatedAt: new Date().toISOString(),
+        };
+      });
+      response.json(saved);
+    } catch (error) {
+      sendError(response, error);
+    }
+  });
+
   app.post("/api/operations/bootstrap", async (request, response) => {
     try {
       const counts = {

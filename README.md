@@ -16,7 +16,11 @@ Checkout defaults to 12:00 p.m. Lagos time. From 11:30 a.m., workers and manager
 
 Older demo reservations are still browser-local because their room identifiers do not match the current database rooms. Financial totals exclude those records and use persisted hotel and direct F&B transactions only. Sample reviews whose booking records do not exist are not imported. Other prototype-only screens may still use browser-local data.
 
-The sign-in and role selector remain preview controls, not production authentication or server-side identity management. Do not use this build to protect real staff accounts or sensitive guest data until authenticated sessions and server-enforced permissions are implemented.
+## Staff authentication
+
+Staff sign in with their work email and an individual password. Passwords use Node.js scrypt hashes; sessions use hashed, expiring database tokens in HttpOnly, SameSite cookies, and Secure cookies in production. Five failed attempts from one client address trigger a 15-minute lockout stored in the database. Managers and CEOs can create staff accounts or reset passwords from Team & settings; passwords must be at least 12 characters. Set the initial CEO password with `npm run setup:admin` from `boms-apartment-react`.
+
+Production deployment still requires HTTPS at the public edge, a correctly configured reverse proxy, protected database/backups, monitoring, and an account recovery procedure. Set `NODE_ENV=production` and `TRUST_PROXY_HOPS` to the exact number of trusted proxy hops so secure cookies and client-address throttling work correctly. The API binds to loopback by default. Review deployment access controls before exposing the service to the internet; this project has not undergone an independent security audit.
 
 ## Database safeguards
 

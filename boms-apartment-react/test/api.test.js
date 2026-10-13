@@ -6,14 +6,48 @@ import { syncLowStockNotifications } from "../inventory-alerts.js";
 import { registerOperationsRoutes } from "../operations-api.js";
 import { registerWorkspaceRoutes } from "../workspace-api.js";
 import { registerReservationWorkflowRoutes, workerMayCheckOut } from "../reservation-workflow-api.js";
+import { registerPublicWebsiteRoutes } from "../public-website-api.js";
 import { createRouteApp, createTestDatabase, seedFnb } from "./helpers.js";
 
 const propertyId = "property_boms";
 
-function headers(role = "worker", name = "Test User", idempotencyKey = "") {
+test("public website lists room types without exposing unit occupancy", async () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  database.prepare(`
+    INSERT INTO room_types (
+      id, property_id, name, size_m2, bed_type, max_guests, description,
+      base_rate_kobo, photos_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run("type-suite", propertyId, "One Bedroom", 42, "King bed", 2, "Separate bedroom and lounge.", 12500000, '["/room-images/suite.jpg"]');
+  database.prepare("INSERT INTO units (id, property_id, number, room_type_id) VALUES (?, ?, ?, ?)")
+    .run("unit-private", propertyId, "101", "type-suite");
+  database.prepare("INSERT INTO room_types (id, property_id, name) VALUES (?, ?, ?)")
+    .run("type-unstocked", propertyId, "Unstocked type");
+  registerPublicWebsiteRoutes(app, database, propertyId);
+
+  const result = await app.call("GET", "/api/public/rooms");
+  assert.equal(result.code, 200);
+  assert.deepEqual(result.body, [{
+    id: "type-suite",
+    name: "One Bedroom",
+    sizeM2: 42,
+    bedType: "King bed",
+    maxGuests: 2,
+    description: "Separate bedroom and lounge.",
+    rateKobo: 12500000,
+    images: ["/room-images/suite.jpg"],
+  }]);
+  assert.equal(JSON.stringify(result.body).includes("unit-private"), false);
+  assert.equal(JSON.stringify(result.body).includes("101"), false);
+  database.close();
+});
+
+function headers(role = "worker", name = "Test User", idempotencyKey = "", userId = "") {
   return {
     "x-test-role": role,
     "x-test-user-name": name,
+    ...(userId ? { "x-test-user-id": userId } : {}),
     ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}),
   };
 }
@@ -58,6 +92,21 @@ test("F&B acceptance deducts recipe stock exactly once", async () => {
   });
   assert.equal(repeated.code, 409);
   assert.equal(database.prepare("SELECT qty FROM inventory_items WHERE id = 'stock-rice'").get().qty, 4);
+  database.close();
+});
+
+test("cash room-service orders retain their selected room", async () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  seedFnb(database);
+  database.prepare("INSERT INTO units (id, property_id, number) VALUES ('room-101', ?, '101')").run(propertyId);
+  registerFnbRoutes(app, database, propertyId);
+
+  const order = await createCashFnbOrder(app, { source: "room_service", unitId: "room-101", notes: "No peanuts" }, "cash-room-service-order");
+  assert.equal(order.source, "room_service");
+  assert.equal(order.unitId, "room-101");
+  assert.equal(order.bookingId, "");
+  assert.equal(order.notes, "No peanuts");
   database.close();
 });
 
@@ -546,18 +595,19 @@ test("daily close uses persisted receipts and enforces manager access", async ()
   database.close();
 });
 
-test("login requires a valid password and creates an HttpOnly session", async () => {
+test("password login creates an HttpOnly session and rejects missing or incorrect passwords", async () => {
   const database = createTestDatabase();
   const app = createRouteApp();
   database.prepare("INSERT INTO users (id, property_id, name, email, role, password_hash, active) VALUES ('worker-1', ?, 'Front Desk', 'desk@example.test', 'worker', ?, 1)")
     .run(propertyId, hashPassword("unused-password"));
   registerAuthRoutes(app, database, propertyId);
 
-  const invalid = await app.call("POST", "/api/auth/login", { body: { email: "unknown@example.test", password: "anything" } });
+  const invalid = await app.call("POST", "/api/auth/login", { body: { email: "unknown@example.test" } });
   assert.equal(invalid.code, 401);
+  assert.equal(invalid.body.error, "Email or password is incorrect.");
   const missingPassword = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test" } });
   assert.equal(missingPassword.code, 401);
-  const wrongPassword = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "wrong-password" } });
+  const wrongPassword = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "incorrect-password" } });
   assert.equal(wrongPassword.code, 401);
   const login = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "unused-password" } });
   assert.equal(login.code, 200);
@@ -578,6 +628,16 @@ test("login requires a valid password and creates an HttpOnly session", async ()
   await middleware(authenticatedRequest, authenticated, () => { nextCalled = true; });
   assert.equal(nextCalled, true);
   assert.equal(authenticatedRequest.user.role, "worker");
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const rejected = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "incorrect-password" } });
+    assert.equal(rejected.code, 401);
+  }
+  const threshold = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "incorrect-password" } });
+  assert.equal(threshold.code, 429);
+  const locked = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "unused-password" } });
+  assert.equal(locked.code, 429);
+  assert.equal(database.prepare("SELECT failed_attempts FROM auth_login_attempts").get().failed_attempts, 5);
   database.close();
 });
 
@@ -616,6 +676,42 @@ test("low-stock notifications alert management roles without duplicate active al
   database.prepare("UPDATE inventory_items SET qty = 4 WHERE id = 'item-1'").run();
   await syncLowStockNotifications(database, propertyId);
   assert.equal(database.prepare("SELECT count(*) AS count FROM notifications WHERE type = 'low_stock:item-1' AND deleted_at IS NULL").get().count, 2);
+  database.close();
+});
+
+test("workers can request restock and notify active management accounts", async () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  database.prepare("INSERT INTO users (id, property_id, name, email, role, active) VALUES ('test-worker', ?, 'Grace Ade', 'grace@example.test', 'worker', 1)").run(propertyId);
+  database.prepare("INSERT INTO users (id, property_id, name, email, role, active) VALUES ('worker-2', ?, 'Other Worker', 'other@example.test', 'worker', 1)").run(propertyId);
+  database.prepare("INSERT INTO users (id, property_id, name, email, role, active) VALUES ('manager-1', ?, 'Manager', 'manager@example.test', 'manager', 1)").run(propertyId);
+  database.prepare("INSERT INTO users (id, property_id, name, email, role, active) VALUES ('ceo-1', ?, 'Admin', 'admin@example.test', 'ceo', 1)").run(propertyId);
+  database.prepare("INSERT INTO inventory_items (id, property_id, name, category, unit, qty, min_qty, cost_kobo) VALUES ('item-1', ?, 'Rice', 'Food', 'kg', 2, 5, 100)").run(propertyId);
+  registerOperationsRoutes(app, database, propertyId);
+
+  const result = await app.call("POST", "/api/restock-requests", { headers: headers("worker", "Grace Ade", "restock-request-1"), body: {} });
+  assert.equal(result.code, 201);
+  assert.equal(result.body.status, "requested");
+  assert.equal(result.body.items.length, 1);
+  assert.equal(result.body.items[0].name, "Rice");
+  assert.equal(database.prepare("SELECT count(*) AS count FROM notifications WHERE type LIKE 'restock_request:%' AND deleted_at IS NULL").get().count, 2);
+  assert.equal(database.prepare("SELECT body FROM notifications WHERE user_id = 'manager-1'").get().body, "Grace Ade requested restock for: Rice (2 kg; minimum 5 kg).");
+
+  const createdId = result.body.id;
+  const managerList = await app.call("GET", "/api/restock-requests", { headers: headers("manager", "Manager", "", "manager-1") });
+  assert.equal(managerList.body[0].id, createdId);
+  const otherWorkerList = await app.call("GET", "/api/restock-requests", { headers: headers("worker", "Other Worker", "", "worker-2") });
+  assert.equal(otherWorkerList.body.length, 0);
+  const reviewing = await app.call("PATCH", `/api/restock-requests/${createdId}/status`, { headers: headers("manager", "Manager", "", "manager-1"), body: { status: "reviewing" } });
+  assert.equal(reviewing.code, 200);
+  const ordered = await app.call("PATCH", `/api/restock-requests/${createdId}/status`, { headers: headers("manager", "Manager", "", "manager-1"), body: { status: "ordered" } });
+  assert.equal(ordered.body.status, "ordered");
+  const received = await app.call("PATCH", `/api/restock-requests/${createdId}/status`, { headers: headers("manager", "Manager", "", "manager-1"), body: { status: "received", managerNote: "Delivery checked" } });
+  assert.equal(received.body.status, "received");
+  assert.equal(database.prepare("SELECT count(*) AS count FROM notifications WHERE user_id = 'test-worker' AND type LIKE 'restock_update:%'").get().count, 3);
+
+  const denied = await app.call("POST", "/api/restock-requests", { headers: headers("manager", "Manager"), body: {} });
+  assert.equal(denied.code, 403);
   database.close();
 });
 

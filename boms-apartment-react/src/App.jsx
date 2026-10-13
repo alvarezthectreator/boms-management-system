@@ -59,6 +59,7 @@ import {
   nightsBetween,
   resolvePageFromRoute,
 } from "./data.js";
+import PropertyWebsite from "./PropertyWebsite.jsx";
 
 const STORAGE_KEY = "boms-hotel-demo-v1";
 function getLagosDateTime() {
@@ -477,7 +478,6 @@ function InputField({ field, value, onChange }) {
           step={field.step || (field.type === "number" ? "any" : undefined)}
           type={field.type || "text"}
           name={field.name}
-          autoComplete={field.autoComplete}
           {...valueProps}
           placeholder={field.placeholder}
           className={base}
@@ -1348,14 +1348,16 @@ function RecordDialog({ type, data, onClose, onSave, record }) {
   );
 }
 
-function DashboardOrderComposer({ data, fnbData, loading, canAddMenu, onAddMenu, onSave }) {
+function DashboardOrderComposer({ data, rooms, fnbData, loading, canAddMenu, onAddMenu, onSave }) {
   const [station, setStation] = useState("kitchen");
-  const [bookingId, setBookingId] = useState("");
+  const [selectedRoomId, setSelectedRoomId] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [loungeGuestName, setLoungeGuestName] = useState("");
+  const [orderNotes, setOrderNotes] = useState("");
   const [cart, setCart] = useState([]);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const roomScrollerRef = useRef(null);
   const stationItems = fnbData.menuItems.filter((item) => item.station === station);
   const normalizedName = (name = "") => name.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const catalogCards = station === "kitchen"
@@ -1375,6 +1377,7 @@ function DashboardOrderComposer({ data, fnbData, loading, canAddMenu, onAddMenu,
       ]
     : stationItems.map((item) => ({ id: item.id, name: item.name, category: item.category, item }));
   const checkedInBookings = data.bookings.filter((booking) => booking.databaseBooking && booking.status === "checked_in");
+  const selectedRoomBooking = checkedInBookings.find((booking) => booking.unitId === selectedRoomId);
   const subtotalKobo = cart.reduce((sum, line) => {
     const item = fnbData.menuItems.find((entry) => entry.id === line.menuItemId);
     return sum + (item?.priceKobo || 0) * line.quantity;
@@ -1396,27 +1399,56 @@ function DashboardOrderComposer({ data, fnbData, loading, canAddMenu, onAddMenu,
     if (!cart.length) return;
     setSaving(true);
     setError("");
-    const booking = checkedInBookings.find((item) => item.id === bookingId);
+    const booking = selectedRoomBooking;
     const result = await onSave({
       items: cart,
-      source: booking ? "room_service" : "lounge",
+      source: selectedRoomId ? "room_service" : "lounge",
       paymentMethod: booking ? "room_charge" : paymentMethod,
       bookingId: booking?.id || "",
-      unitId: booking?.unitId || "",
+      unitId: selectedRoomId,
       guestName: booking ? guestFor(data, booking.guestId)?.name || "" : loungeGuestName.trim(),
+      notes: orderNotes.trim(),
     });
     setSaving(false);
     if (result?.error) setError(result.error);
-    else setCart([]);
+    else {
+      setCart([]);
+      setOrderNotes("");
+    }
   }
 
   return (
     <Panel className="mt-4 p-4 sm:p-5">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-4">
         <div>
           <h2 className="font-semibold text-[#25332b]">Order food & drinks</h2>
           <p className="mt-1 text-xs text-[#7a8880]">Choose menu items and send them to the kitchen or bar.</p>
         </div>
+      </div>
+      <section className="mb-4" aria-label="Choose an order destination">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold text-[#34443a]">Select a room</h3>
+          <div className="flex gap-1">
+            <button type="button" aria-label="Scroll rooms left" title="Scroll rooms left" onClick={() => roomScrollerRef.current?.scrollBy({ left: -240, behavior: "smooth" })} className="grid size-9 place-items-center rounded-md border border-[#dfe7e1] text-[#52655a] hover:bg-[#edf3ee]"><ChevronLeft size={17} /></button>
+            <button type="button" aria-label="Scroll rooms right" title="Scroll rooms right" onClick={() => roomScrollerRef.current?.scrollBy({ left: 240, behavior: "smooth" })} className="grid size-9 place-items-center rounded-md border border-[#dfe7e1] text-[#52655a] hover:bg-[#edf3ee]"><ChevronRight size={17} /></button>
+          </div>
+        </div>
+        <div ref={roomScrollerRef} className="flex snap-x gap-3 overflow-x-auto pb-2" aria-label="Rooms">
+          <button type="button" aria-pressed={!selectedRoomId} onClick={() => setSelectedRoomId("")} className={`w-36 shrink-0 snap-start overflow-hidden rounded-lg border text-left transition ${!selectedRoomId ? "border-[#16836b] ring-2 ring-[#16836b]/20" : "border-[#dfe7e1] hover:border-[#9eafa4]"}`}>
+            <span className="grid aspect-square place-items-center bg-[#edf3ee] text-[#688273]"><Utensils size={28} /></span>
+            <span className="block p-2.5"><span className="block truncate text-sm font-semibold text-[#2c3b34]">Lounge</span><span className="mt-0.5 block text-xs capitalize text-[#77857d]">Personal order</span></span>
+          </button>
+          {rooms.map((room) => {
+            const image = room.images?.[0];
+            const isSelected = selectedRoomId === room.id;
+            return <button key={room.id} type="button" aria-pressed={isSelected} aria-label={`Room ${room.number}, ${room.roomTypeName || "Room"}, ${room.status.replaceAll("_", " ")}`} onClick={() => setSelectedRoomId(room.id)} className={`w-36 shrink-0 snap-start overflow-hidden rounded-lg border text-left transition ${isSelected ? "border-[#16836b] ring-2 ring-[#16836b]/20" : "border-[#dfe7e1] hover:border-[#9eafa4]"}`}>
+              {image ? <img src={image} alt={`Room ${room.number}`} loading="lazy" className="aspect-square w-full object-cover" /> : <span className="grid aspect-square place-items-center bg-[#edf3ee] text-[#688273]"><BedDouble size={28} /></span>}
+              <span className="block p-2.5"><span className="block truncate text-sm font-semibold text-[#2c3b34]">Room {room.number}</span><span className="mt-0.5 block truncate text-xs text-[#77857d]">{room.roomTypeName || "Room"} · {room.status.replaceAll("_", " ")}</span></span>
+            </button>;
+          })}
+        </div>
+      </section>
+      <div className="mb-4 flex justify-end">
         <div className="inline-flex rounded-lg bg-[#edf2ee] p-1" role="group" aria-label="Menu section">
           {[ ["kitchen", "Food"], ["bar", "Drinks"] ].map(([key, label]) => (
             <button key={key} type="button" onClick={() => setStation(key)} aria-pressed={station === key}
@@ -1455,20 +1487,17 @@ function DashboardOrderComposer({ data, fnbData, loading, canAddMenu, onAddMenu,
         </div>
         <div className="flex min-h-48 flex-col rounded-lg border border-[#e3eae5] p-3">
           <div className="mb-2 flex items-center justify-between"><h3 className="text-sm font-semibold">Current order</h3><span className="text-xs text-[#718078]">{cart.reduce((sum, line) => sum + line.quantity, 0)} items</span></div>
-          <label className="mb-3 block text-xs font-medium text-[#58685e]">Order for
-            <select value={bookingId} onChange={(event) => setBookingId(event.target.value)} className="mt-1 block min-h-10 w-full rounded-md border border-[#dfe7e1] bg-white px-2.5 text-sm">
-              <option value="">Lounge · personal order</option>
-              {checkedInBookings.map((booking) => <option key={booking.id} value={booking.id}>{unitFor(data, booking.unitId)?.number || "Room"} · {guestFor(data, booking.guestId)?.name || booking.id}</option>)}
-            </select>
-          </label>
-          {!bookingId && <label className="mb-3 block text-xs font-medium text-[#58685e]">Guest name (optional)
+          {!selectedRoomBooking && <label className="mb-3 block text-xs font-medium text-[#58685e]">Guest name (optional)
             <input value={loungeGuestName} onChange={(event) => setLoungeGuestName(event.target.value)} placeholder="Name for this order" className="mt-1 block min-h-10 w-full rounded-md border border-[#dfe7e1] px-2.5 text-sm" />
           </label>}
-          {!bookingId && <label className="mb-3 block text-xs font-medium text-[#58685e]">Payment
+          {!selectedRoomBooking && <label className="mb-3 block text-xs font-medium text-[#58685e]">Payment
             <select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} className="mt-1 block min-h-10 w-full rounded-md border border-[#dfe7e1] bg-white px-2.5 text-sm">
               {["cash", "card", "transfer"].map((method) => <option key={method} value={method}>{method[0].toUpperCase() + method.slice(1)}</option>)}
             </select>
           </label>}
+          <label className="mb-3 block text-xs font-medium text-[#58685e]">Order notes or allergies
+            <textarea value={orderNotes} onChange={(event) => setOrderNotes(event.target.value)} maxLength={500} rows={2} placeholder="Allergies or preparation requests" className="mt-1 block w-full resize-y rounded-md border border-[#dfe7e1] bg-white px-2.5 py-2 text-sm font-normal" />
+          </label>
           <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
             {cart.map((line) => {
               const item = fnbData.menuItems.find((entry) => entry.id === line.menuItemId);
@@ -1492,22 +1521,60 @@ function DashboardOrderComposer({ data, fnbData, loading, canAddMenu, onAddMenu,
   );
 }
 
+function LowStockRestockBanner({ items, role, onNavigate, onRequestRestock }) {
+  const [dismissedAlertKey, setDismissedAlertKey] = useState("");
+  const [requesting, setRequesting] = useState(false);
+  const alertKey = items.map((item) => `${item.id}:${item.quantity}:${item.minimum}`).sort().join("|");
+  if (!items.length || dismissedAlertKey === alertKey) return null;
+
+  async function requestRestock() {
+    setRequesting(true);
+    await onRequestRestock();
+    setRequesting(false);
+  }
+
+  return (
+    <Panel role="status" aria-live="polite" className="mt-4 border-rose-300 bg-rose-50 p-4 sm:p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <CircleAlert className="mt-0.5 shrink-0 text-rose-700" size={19} />
+          <div>
+            <h2 className="font-semibold text-rose-900">Low stock · restock needed</h2>
+            <p className="mt-1 text-xs text-rose-800">{items.length} item{items.length === 1 ? "" : "s"} at or below minimum.</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="danger" className="min-h-9" disabled={role === "worker" && requesting} onClick={role === "worker" ? requestRestock : () => onNavigate("purchasing")}><ShoppingCart size={15} />{role === "worker" ? requesting ? "Sending…" : "Request restock" : "Create purchase"}</Button>
+          <Button variant="secondary" className="min-h-9" onClick={() => setDismissedAlertKey(alertKey)}>Settled</Button>
+          <button type="button" aria-label="Dismiss restock alert" title="Dismiss alert" onClick={() => setDismissedAlertKey(alertKey)} className="grid size-9 shrink-0 place-items-center rounded-md text-rose-800 hover:bg-rose-100"><X size={17} /></button>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 function Dashboard({
   data,
   databaseRooms,
   fnbData,
   fnbLoading,
+  restockRequests = [],
   userName,
   onNavigate,
   onCreate,
   onBookingAction,
   onExtendBooking,
   onSaveFnbOrder,
+  onRequestRestock,
+  onFnbStatus,
+  onTaskAction,
+  onRequestAction,
   canAddMenu,
   onAddMenu,
   checkoutCalls,
   housekeepingPrepAlerts,
   checkoutFollowUps,
+  role,
 }) {
   const inventoryUnits = data.units.some((unit) => unit.databaseRoom)
     ? data.units.filter((unit) => unit.databaseRoom)
@@ -1555,27 +1622,138 @@ function Dashboard({
       isUnitAvailable(unit, TODAY, defaultRoomCheckout, data.bookings, data.blocks || []);
   });
   const barValues = [42, 67, 52, 84, 58, 91, 73];
+  const activeFnbOrders = (fnbData.orders || [])
+    .filter((order) => ["new", "accepted", "preparing", "ready"].includes(order.status))
+    .slice(0, 4);
+  const assignedTasks = data.tasks.filter((task) => task.assignedTo === userName && ["open", "in_progress"].includes(task.status)).slice(0, 4);
+  const assignedRequests = data.requests.filter((request) => request.assignedTo === userName && ["open", "pending"].includes(request.status)).slice(0, 4);
+
+  const workerHeader = (
+    <PageHeader
+      eyebrow="Operations board · Lagos"
+      title={`Good shift, ${userName.split(" ")[0]}`}
+      description="Take orders, keep the room flow moving, and stay on top of follow-ups."
+      action={
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={() => onNavigate("restaurant")}>
+            <Utensils size={16} />
+            Food & drink
+          </Button>
+          <Button variant="secondary" onClick={() => onNavigate("housekeeping")}>
+            <ClipboardList size={16} />
+            Housekeeping
+          </Button>
+        </div>
+      }
+    />
+  );
+
+  const managementHeader = (
+    <PageHeader
+      eyebrow="Operations overview · Lagos"
+      title={`Good morning, ${userName.split(" ")[0]}`}
+      description="Focus on guest bookings, arrivals, departures, housekeeping prep, and room readiness."
+      action={
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={() => onNavigate("calendar")}>
+            <CalendarDays size={16} />
+            Calendar
+          </Button>
+          <Button onClick={() => onCreate("booking")}>
+            <Plus size={16} />
+            New booking
+          </Button>
+        </div>
+      }
+    />
+  );
+
+  if (role === "worker") {
+    return (
+      <div className="flex flex-col">
+        <div className="order-first">{workerHeader}</div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <StatCard label="Orders in queue" value={activeFnbOrders.length} note="Food & drink now in progress" icon={Utensils} />
+          <StatCard label="Ready rooms" value={deskSummary.readyRooms} note="Prepared for arrivals or check-ins" icon={BedDouble} />
+          <StatCard label="Arrivals today" value={arrivals} note="Confirmed guests checking in" icon={ArrowRight} />
+          <StatCard label="Departures today" value={departures} note="Guests due to check out" icon={CalendarDays} />
+        </div>
+        <LowStockRestockBanner items={lowStockItems} role={role} onNavigate={onNavigate} onRequestRestock={onRequestRestock} />
+
+        <DashboardOrderComposer data={data} rooms={roomInventory} fnbData={fnbData} loading={fnbLoading} canAddMenu={canAddMenu} onAddMenu={onAddMenu} onSave={onSaveFnbOrder} />
+
+        <div className="mt-4 grid gap-4 xl:grid-cols-2">
+          <Panel className="p-4 sm:p-5">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div><h2 className="font-semibold text-[#25332b]">Your work</h2><p className="mt-1 text-xs text-[#7a8880]">Assigned housekeeping and guest requests</p></div>
+              <Button variant="secondary" className="min-h-9 px-3 text-xs" onClick={() => onNavigate("housekeeping")}>Open tasks</Button>
+            </div>
+            {assignedTasks.length || assignedRequests.length ? <div className="divide-y divide-[#e8eeea]">
+              {assignedTasks.map((task) => <div key={task.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-1 last:pb-1"><div><p className="text-sm font-medium text-[#2c3b34]">Room {unitFor(data, task.unitId)?.number || "—"} · {task.type}</p><p className="mt-0.5 text-xs capitalize text-[#77857d]">{task.priority} priority · {task.status.replace("_", " ")}</p></div><Button variant="secondary" className="min-h-8 px-3 text-xs" onClick={() => onTaskAction(task, task.status === "open" ? "in_progress" : "done")}>{task.status === "open" ? "Start" : "Complete"}</Button></div>)}
+              {assignedRequests.map((request) => <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-1 last:pb-1"><div><p className="text-sm font-medium text-[#2c3b34]">{request.type} · Room {unitFor(data, request.unitId)?.number || "—"}</p><p className="mt-0.5 text-xs text-[#77857d]">{guestFor(data, request.guestId)?.name || "Guest"} · {request.status === "open" ? "New request" : "In progress"}</p></div><Button variant="secondary" className="min-h-8 px-3 text-xs" onClick={() => onRequestAction(request, request.status === "open" ? "pending" : "done")}>{request.status === "open" ? "Start" : "Complete"}</Button></div>)}
+            </div> : <p className="py-3 text-sm text-[#77857d]">No work is currently assigned to you.</p>}
+            {restockRequests.length > 0 && <div className="mt-3 border-t border-[#e8eeea] pt-3"><p className="mb-2 text-xs font-semibold uppercase text-[#77857d]">Restock requests</p><div className="space-y-2">{restockRequests.slice(0, 3).map((request) => <div key={request.id} className="flex items-start justify-between gap-3 text-xs"><span className="min-w-0 flex-1 text-[#526157]">{request.items.map((item) => item.name).join(", ")}</span><Status value={request.status} /></div>)}</div></div>}
+          </Panel>
+
+          <Panel className="p-4 sm:p-5">
+            <div className="mb-3 flex items-center justify-between gap-3"><div><h2 className="font-semibold text-[#25332b]">Kitchen & bar queue</h2><p className="mt-1 text-xs text-[#7a8880]">Advance active orders through preparation</p></div><Button variant="secondary" className="min-h-9 px-3 text-xs" onClick={() => onNavigate("restaurant")}>Open queue</Button></div>
+            {activeFnbOrders.length ? <div className="divide-y divide-[#e8eeea]">{activeFnbOrders.map((order) => {
+              const nextStatus = { new: "accepted", accepted: "preparing", preparing: "ready", ready: "served" }[order.status];
+              const nextLabel = { accepted: "Accept", preparing: "Start", ready: "Mark ready", served: "Serve" }[nextStatus];
+              return <div key={order.id} className="py-3 first:pt-1 last:pb-1"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-sm font-medium text-[#2c3b34]">{order.orderNumber} · {order.unitId ? `Room ${unitFor(data, order.unitId)?.number || "—"}` : order.guestName || "Lounge"}</p><p className="mt-0.5 text-xs capitalize text-[#77857d]">{order.status} · {order.items.map((item) => `${item.quantity} × ${item.name}`).join(", ")}</p>{order.notes && <p className="mt-1 text-xs text-amber-800">Note: {order.notes}</p>}</div><Button variant="secondary" className="min-h-8 px-3 text-xs" onClick={() => onFnbStatus(order, nextStatus)}>{nextLabel}</Button></div></div>;
+            })}</div> : <p className="py-3 text-sm text-[#77857d]">No active food or drink orders.</p>}
+          </Panel>
+        </div>
+
+        {checkoutCalls.length > 0 && (
+          <Panel className="mt-4 border-amber-300 bg-amber-50/70 p-4 sm:p-5">
+            <div className="mb-3"><h2 className="font-semibold text-[#503915]">Call today’s checkouts</h2><p className="mt-1 text-xs text-[#795e2b]">Call guests by 11:00 a.m. and extend one night if they confirm.</p></div>
+            <div className="divide-y divide-amber-200">{checkoutCalls.map((booking) => {
+              const guest = guestFor(data, booking.guestId);
+              const unit = unitFor(data, booking.unitId);
+              return <div key={booking.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-1 last:pb-0">
+                <div><p className="text-sm font-medium text-[#3c3322]">{guest?.name || "Guest"} · Room {unit?.number || "—"}</p><p className="mt-0.5 text-xs text-[#795e2b]">Checkout by {data.settings.checkOutTime}</p></div>
+                <div className="flex items-center gap-2">{guest?.phone && <a href={`tel:${guest.phone.replace(/[^+\d]/g, "")}`} className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-amber-500 px-3 text-sm font-medium text-[#795e2b]"><PhoneCall size={15} />Call</a>}<Button variant="secondary" className="min-h-9 px-3 text-sm" onClick={() => onExtendBooking(booking)}>Extend 1 night</Button></div>
+              </div>;
+            })}</div>
+          </Panel>
+        )}
+
+        {housekeepingPrepAlerts.length > 0 && (
+          <Panel className="mt-4 border-[#d7e3d9] bg-[#f5f8f4] p-4 sm:p-5">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-semibold text-[#283b30]">Prepare housekeeping for check-outs</h2>
+                <p className="mt-1 text-xs text-[#66776c]">Call housekeeping before noon so rooms can be cleaned after guests leave.</p>
+              </div>
+              <Button variant="secondary" onClick={() => onNavigate("housekeeping")}>
+                <ClipboardList size={16} />Housekeeping board
+              </Button>
+            </div>
+            <div className="divide-y divide-[#dce6dd]">
+              {housekeepingPrepAlerts.map((booking) => {
+                const guest = guestFor(data, booking.guestId);
+                const unit = unitFor(data, booking.unitId);
+                return (
+                  <div key={booking.id} className="py-2.5 first:pt-0 last:pb-0">
+                    <p className="text-sm font-medium text-[#2e3e34]">Room {unit?.number || "—"} · {guest?.name || "Guest"}</p>
+                    <p className="mt-0.5 text-xs text-[#66776c]">Due out by {data.settings.checkOutTime}. Call housekeeping to tidy the room after checkout.</p>
+                  </div>
+                );
+              })}
+            </div>
+          </Panel>
+        )}
+
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col">
-      <div className="order-first">
-      <PageHeader
-        eyebrow="Monday, 5 October 2026 · Lagos"
-        title={`Good morning, ${userName.split(" ")[0]}`}
-        description="Here’s the property at a glance."
-        action={
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => onNavigate("calendar")}>
-              <CalendarDays size={16} />
-              Calendar
-            </Button>
-            <Button onClick={() => onCreate("booking")}>
-              <Plus size={16} />
-              New booking
-            </Button>
-          </div>
-        }
-      />
-      </div>
+      <div className="order-first">{managementHeader}</div>
+
       <Panel className="mt-4 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e8eeea] px-4 py-4 sm:px-5">
           <div><h2 className="font-semibold text-[#25332b]">Book a room</h2><p className="mt-1 text-xs text-[#7a8880]">Rooms ready for a new reservation</p></div>
@@ -1593,52 +1771,39 @@ function Dashboard({
           ))}
         </div> : <div className="px-5 py-4 text-sm text-[#718078]">No rooms are ready to reserve right now. Check room status or create a booking to see the full availability calendar.</div>}
       </Panel>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="Rooms booked today"
-          value={deskSummary.roomsBookedToday}
-          note="Rooms occupied or arriving today"
-          icon={BedDouble}
-        />
-        <StatCard
-          label="Occupancy"
-          value={`${occupancy}%`}
-          note={`${occupied} occupied · ${availableForOccupancy - occupied} available`}
-          icon={BedDouble}
-        />
-        <StatCard
-          label="Arrivals today"
-          value={arrivals}
-          note="Confirmed guests checking in"
-          icon={ArrowRight}
-        />
-        <StatCard
-          label="Departures today"
-          value={departures}
-          note="Guests due to check out"
-          icon={CalendarDays}
-        />
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Rooms booked today" value={deskSummary.roomsBookedToday} note="Rooms occupied or arriving today" icon={BedDouble} />
+        <StatCard label="Occupancy" value={`${occupancy}%`} note={`${occupied} occupied · ${availableForOccupancy - occupied} available`} icon={BedDouble} />
+        <StatCard label="Arrivals today" value={arrivals} note="Confirmed guests checking in" icon={ArrowRight} />
+        <StatCard label="Departures today" value={departures} note="Guests due to check out" icon={CalendarDays} />
       </div>
-      <DashboardOrderComposer data={data} fnbData={fnbData} loading={fnbLoading} canAddMenu={canAddMenu} onAddMenu={onAddMenu} onSave={onSaveFnbOrder} />
-      {checkoutCalls.length > 0 && <Panel className="mt-4 border-amber-300 bg-amber-50/70 p-4 sm:p-5">
-        <div className="mb-3"><h2 className="font-semibold text-[#503915]">Call today’s checkouts</h2><p className="mt-1 text-xs text-[#795e2b]">Call guests by 11:00 a.m. and extend one night if they confirm.</p></div>
-        <div className="divide-y divide-amber-200">{checkoutCalls.map((booking) => {
-          const guest = guestFor(data, booking.guestId);
-          const unit = unitFor(data, booking.unitId);
-          return <div key={booking.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-1 last:pb-0">
-            <div><p className="text-sm font-medium text-[#3c3322]">{guest?.name || "Guest"} · Room {unit?.number || "—"}</p><p className="mt-0.5 text-xs text-[#795e2b]">Checkout by {data.settings.checkOutTime}</p></div>
-            <div className="flex items-center gap-2">{guest?.phone && <a href={`tel:${guest.phone.replace(/[^+\d]/g, "")}`} className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-amber-500 px-3 text-sm font-medium text-[#795e2b]"><PhoneCall size={15} />Call</a>}<Button variant="secondary" className="min-h-9 px-3 text-sm" onClick={() => onExtendBooking(booking)}>Extend 1 night</Button></div>
-          </div>;
-        })}</div>
-      </Panel>}
-      {checkoutFollowUps.length > 0 && <Panel className="mt-4 border-amber-300 bg-amber-50/70 p-4 sm:p-5">
-        <div className="mb-3"><h2 className="font-semibold text-[#503915]">Checkout due now</h2><p className="mt-1 text-xs text-[#795e2b]">If the guest is not extending, complete checkout so housekeeping can prepare the room.</p></div>
-        <div className="divide-y divide-amber-200">{checkoutFollowUps.map((booking) => {
-          const guest = guestFor(data, booking.guestId);
-          const unit = unitFor(data, booking.unitId);
-          return <div key={booking.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-1 last:pb-0"><div><p className="text-sm font-medium text-[#3c3322]">{guest?.name || "Guest"} · Room {unit?.number || "—"}</p><p className="mt-0.5 text-xs text-[#795e2b]">Due out by {data.settings.checkOutTime}</p></div><Button className="min-h-9 px-3 text-sm" onClick={() => onBookingAction(booking, "checkout")}>Check out</Button></div>;
-        })}</div>
-      </Panel>}
+
+      {checkoutCalls.length > 0 && (
+        <Panel className="mt-4 border-amber-300 bg-amber-50/70 p-4 sm:p-5">
+          <div className="mb-3"><h2 className="font-semibold text-[#503915]">Call today’s checkouts</h2><p className="mt-1 text-xs text-[#795e2b]">Call guests by 11:00 a.m. and extend one night if they confirm.</p></div>
+          <div className="divide-y divide-amber-200">{checkoutCalls.map((booking) => {
+            const guest = guestFor(data, booking.guestId);
+            const unit = unitFor(data, booking.unitId);
+            return <div key={booking.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-1 last:pb-0">
+              <div><p className="text-sm font-medium text-[#3c3322]">{guest?.name || "Guest"} · Room {unit?.number || "—"}</p><p className="mt-0.5 text-xs text-[#795e2b]">Checkout by {data.settings.checkOutTime}</p></div>
+              <div className="flex items-center gap-2">{guest?.phone && <a href={`tel:${guest.phone.replace(/[^+\d]/g, "")}`} className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-amber-500 px-3 text-sm font-medium text-[#795e2b]"><PhoneCall size={15} />Call</a>}<Button variant="secondary" className="min-h-9 px-3 text-sm" onClick={() => onExtendBooking(booking)}>Extend 1 night</Button></div>
+            </div>;
+          })}</div>
+        </Panel>
+      )}
+
+      {checkoutFollowUps.length > 0 && (
+        <Panel className="mt-4 border-amber-300 bg-amber-50/70 p-4 sm:p-5">
+          <div className="mb-3"><h2 className="font-semibold text-[#503915]">Checkout due now</h2><p className="mt-1 text-xs text-[#795e2b]">If the guest is not extending, complete checkout so housekeeping can prepare the room.</p></div>
+          <div className="divide-y divide-amber-200">{checkoutFollowUps.map((booking) => {
+            const guest = guestFor(data, booking.guestId);
+            const unit = unitFor(data, booking.unitId);
+            return <div key={booking.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-1 last:pb-0"><div><p className="text-sm font-medium text-[#3c3322]">{guest?.name || "Guest"} · Room {unit?.number || "—"}</p><p className="mt-0.5 text-xs text-[#795e2b]">Due out by {data.settings.checkOutTime}</p></div><Button className="min-h-9 px-3 text-sm" onClick={() => onBookingAction(booking, "checkout")}>Check out</Button></div>;
+          })}</div>
+        </Panel>
+      )}
+
       {housekeepingPrepAlerts.length > 0 && (
         <Panel className="mt-4 border-[#d7e3d9] bg-[#f5f8f4] p-4 sm:p-5">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -1664,375 +1829,179 @@ function Dashboard({
           </div>
         </Panel>
       )}
-      {lowStockItems.length > 0 && (
-        <Panel className="order-first mt-4 border-rose-300 bg-rose-50 p-4 sm:p-5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="flex min-w-0 items-start gap-3">
-              <CircleAlert className="mt-0.5 shrink-0 text-rose-700" size={19} />
-              <div>
-                <h2 className="font-semibold text-rose-900">Low stock · restock needed</h2>
-                <p className="mt-1 text-xs text-rose-800">{lowStockItems.length} item{lowStockItems.length === 1 ? "" : "s"} at or below minimum. Contact the supplier or request a purchase.</p>
-              </div>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-[1.7fr_0.9fr]">
+        <Panel className="p-4 sm:p-5">
+          <div className="mb-5 flex items-center justify-between gap-4">
+            <div>
+              <h2 className="font-semibold text-[#25332b]">Front desk</h2>
+              <p className="mt-1 text-xs text-[#7a8880]">Today’s front desk queue and room readiness</p>
             </div>
-            <Button variant="danger" className="min-h-9" onClick={() => onNavigate("purchasing")}><ShoppingCart size={15} />Request restock</Button>
+            <Button variant="secondary" onClick={() => onNavigate("bookings")}><CalendarDays size={16} />Open bookings</Button>
           </div>
-          <div className="mt-3 divide-y divide-rose-200">
-            {lowStockItems.slice(0, 5).map((item) => {
-              const supplier = data.suppliers.find((entry) => entry.id === item.supplierId);
-              return <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0">
-                <p className="text-sm font-medium text-rose-950">{item.name} · {item.quantity} {item.unit} left <span className="font-normal text-rose-800">(minimum {item.minimum})</span></p>
-                {supplier?.phone ? <a href={`tel:${supplier.phone.replace(/[^+\d]/g, "")}`} className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-900 underline"><PhoneCall size={13} />Call {supplier.name}</a> : <span className="text-xs text-rose-800">Supplier contact not recorded</span>}
-              </div>;
-            })}
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard label="Arrivals" value={deskSummary.arrivalsToday} note="Confirmed check-ins" icon={ArrowRight} />
+            <StatCard label="Departures" value={deskSummary.departuresToday} note="Guests checking out" icon={CalendarDays} />
+            <StatCard label="Ready rooms" value={deskSummary.readyRooms} note="Available or inspected" icon={BedDouble} />
+            <StatCard label="Priority actions" value={deskSummary.priorityActions} note="Follow-ups today" icon={Bell} />
+          </div>
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <div className="rounded-xl border border-[#e7eee8] bg-[#f9fbf9] p-3.5">
+              <div className="mb-3 flex items-center justify-between"><h3 className="font-semibold text-[#294038]">Arrivals due</h3><span className="text-xs text-[#718078]">{deskSummary.arrivalsToday} guests</span></div>
+              {deskSummary.arrivalQueue.length ? (
+                <div className="space-y-2.5">
+                  {deskSummary.arrivalQueue.slice(0, 4).map((guest) => (
+                    <div key={guest.id} className="flex items-center justify-between gap-3 rounded-lg bg-white px-2.5 py-2">
+                      <div><p className="text-sm font-medium text-[#2c3b34]">{guest.guestName}</p><p className="text-xs text-[#718078]">Room {guest.roomNumber}</p></div>
+                      <Button variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => { const booking = data.bookings.find((item) => item.id === guest.id); if (booking) onBookingAction(booking, "checkin"); }}>Check in</Button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyPanel icon={CalendarDays} title="No arrivals" detail="Confirmed arrivals will appear here." />
+              )}
+            </div>
+            <div className="rounded-xl border border-[#e7eee8] bg-[#f9fbf9] p-3.5">
+              <div className="mb-3 flex items-center justify-between"><h3 className="font-semibold text-[#294038]">Check-outs due</h3><span className="text-xs text-[#718078]">{deskSummary.departuresToday} rooms</span></div>
+              {deskSummary.departureQueue.length ? (
+                <div className="space-y-2.5">
+                  {deskSummary.departureQueue.slice(0, 4).map((guest) => (
+                    <div key={guest.id} className="flex items-center justify-between gap-3 rounded-lg bg-white px-2.5 py-2">
+                      <div><p className="text-sm font-medium text-[#2c3b34]">{guest.guestName}</p><p className="text-xs text-[#718078]">Room {guest.roomNumber}</p></div>
+                      <span className={`rounded-full px-2 py-1 text-[10px] font-medium ${guest.isLate ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"}`}>{guest.isLate ? "Follow up" : "On track"}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyPanel icon={Bell} title="No departures" detail="Checkout follow-ups will appear here." />
+              )}
+            </div>
           </div>
         </Panel>
-      )}
-      {
-        <div className="order-first mt-4 grid gap-4 xl:grid-cols-[1.7fr_0.9fr]">
-          <Panel className="p-4 sm:p-5">
-            <div className="mb-5 flex items-center justify-between gap-4">
-              <div>
-                <h2 className="font-semibold text-[#25332b]">Front desk</h2>
-                <p className="mt-1 text-xs text-[#7a8880]">
-                  Today’s front desk queue and room readiness
-                </p>
-              </div>
-              <Button variant="secondary" onClick={() => onNavigate("bookings")}>
-                <CalendarDays size={16} />
-                Open bookings
-              </Button>
+
+        <Panel className="p-4 sm:p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold text-[#25332b]">Quick actions</h2>
+              <p className="mt-1 text-xs text-[#7a8880]">Keep the desk moving</p>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <StatCard
-                label="Arrivals"
-                value={deskSummary.arrivalsToday}
-                note="Confirmed check-ins"
-                icon={ArrowRight}
-              />
-              <StatCard
-                label="Departures"
-                value={deskSummary.departuresToday}
-                note="Guests checking out"
-                icon={CalendarDays}
-              />
-              <StatCard
-                label="Ready rooms"
-                value={deskSummary.readyRooms}
-                note="Available or inspected"
-                icon={BedDouble}
-              />
-              <StatCard
-                label="Priority actions"
-                value={deskSummary.priorityActions}
-                note="Follow-ups today"
-                icon={Bell}
-              />
+            <span className="grid size-8 place-items-center rounded-full bg-[#edf6f0] text-[#176b54]"><Check size={16} /></span>
+          </div>
+          <div className="space-y-2.5">
+            <Button variant="secondary" className="w-full justify-between" onClick={() => onNavigate("bookings")}><span>Reservations</span><ArrowRight size={15} /></Button>
+            <Button variant="secondary" className="w-full justify-between" onClick={() => onNavigate("housekeeping")}><span>Housekeeping board</span><ClipboardList size={15} /></Button>
+            <Button variant="secondary" className="w-full justify-between" onClick={() => onNavigate("rooms")}><span>Room status</span><BedDouble size={15} /></Button>
+            <Button variant="secondary" className="w-full justify-between" onClick={() => onNavigate("inventory")}><span>Restock checks</span><Package size={15} /></Button>
+          </div>
+          {deskSummary.lowStockItems > 0 && (
+            <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-rose-700">Low stock alert</p>
+              <p className="mt-2 text-sm font-medium text-rose-900">{deskSummary.lowStockItems} item{deskSummary.lowStockItems === 1 ? "" : "s"} need restocking.</p>
             </div>
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
-              <div className="rounded-xl border border-[#e7eee8] bg-[#f9fbf9] p-3.5">
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className="font-semibold text-[#294038]">Arrivals due</h3>
-                  <span className="text-xs text-[#718078]">{deskSummary.arrivalsToday} guests</span>
-                </div>
-                {deskSummary.arrivalQueue.length ? (
-                  <div className="space-y-2.5">
-                    {deskSummary.arrivalQueue.slice(0, 4).map((guest) => (
-                      <div key={guest.id} className="flex items-center justify-between gap-3 rounded-lg bg-white px-2.5 py-2">
-                        <div>
-                          <p className="text-sm font-medium text-[#2c3b34]">{guest.guestName}</p>
-                          <p className="text-xs text-[#718078]">Room {guest.roomNumber}</p>
-                        </div>
-                        <Button
-                          variant="secondary"
-                          className="min-h-8 px-2.5 text-xs"
-                          onClick={() => {
-                            const booking = data.bookings.find((item) => item.id === guest.id);
-                            if (booking) onBookingAction(booking, "checkin");
-                          }}
-                        >
-                          Check in
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyPanel
-                    icon={CalendarDays}
-                    title="No arrivals"
-                    detail="Confirmed arrivals will appear here."
-                  />
-                )}
-              </div>
-              <div className="rounded-xl border border-[#e7eee8] bg-[#f9fbf9] p-3.5">
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className="font-semibold text-[#294038]">Check-outs due</h3>
-                  <span className="text-xs text-[#718078]">{deskSummary.departuresToday} rooms</span>
-                </div>
-                {deskSummary.departureQueue.length ? (
-                  <div className="space-y-2.5">
-                    {deskSummary.departureQueue.slice(0, 4).map((guest) => (
-                      <div key={guest.id} className="flex items-center justify-between gap-3 rounded-lg bg-white px-2.5 py-2">
-                        <div>
-                          <p className="text-sm font-medium text-[#2c3b34]">{guest.guestName}</p>
-                          <p className="text-xs text-[#718078]">Room {guest.roomNumber}</p>
-                        </div>
-                        <span className={`rounded-full px-2 py-1 text-[10px] font-medium ${guest.isLate ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"}`}>
-                          {guest.isLate ? "Follow up" : "On track"}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyPanel
-                    icon={Bell}
-                    title="No departures"
-                    detail="Checkout follow-ups will appear here."
-                  />
-                )}
-              </div>
-            </div>
-          </Panel>
-          <Panel className="p-4 sm:p-5">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold text-[#25332b]">Quick actions</h2>
-                <p className="mt-1 text-xs text-[#7a8880]">Keep the desk moving</p>
-              </div>
-              <span className="grid size-8 place-items-center rounded-full bg-[#edf6f0] text-[#176b54]">
-                <Check size={16} />
-              </span>
-            </div>
-            <div className="space-y-2.5">
-              <Button variant="secondary" className="w-full justify-between" onClick={() => onNavigate("bookings")}>
-                <span>Reservations</span>
-                <ArrowRight size={15} />
-              </Button>
-              <Button variant="secondary" className="w-full justify-between" onClick={() => onNavigate("housekeeping")}>
-                <span>Housekeeping board</span>
-                <ClipboardList size={15} />
-              </Button>
-              <Button variant="secondary" className="w-full justify-between" onClick={() => onNavigate("rooms")}>
-                <span>Room status</span>
-                <BedDouble size={15} />
-              </Button>
-              <Button variant="secondary" className="w-full justify-between" onClick={() => onNavigate("inventory")}>
-                <span>Restock checks</span>
-                <Package size={15} />
-              </Button>
-            </div>
-            {deskSummary.lowStockItems > 0 && (
-              <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-rose-700">Low stock alert</p>
-                <p className="mt-2 text-sm font-medium text-rose-900">{deskSummary.lowStockItems} item{deskSummary.lowStockItems === 1 ? "" : "s"} need restocking.</p>
-              </div>
-            )}
-          </Panel>
-        </div>
-      }
+          )}
+        </Panel>
+      </div>
+
       <div className="mt-4 grid gap-4 xl:grid-cols-[1.55fr_1fr]">
         <Panel className="p-4 sm:p-5">
           <div className="mb-5 flex items-center justify-between gap-4">
             <div>
               <h2 className="font-semibold text-[#25332b]">Revenue overview</h2>
-              <p className="mt-1 text-xs text-[#7a8880]">
-                Payments received · last 7 days
-              </p>
+              <p className="mt-1 text-xs text-[#7a8880]">Payments received · last 7 days</p>
             </div>
-            <button className="inline-flex items-center gap-2 rounded-lg border border-[#e4eae6] px-3 py-2 text-xs text-[#647269]">
-              This week <ChevronDown size={14} />
-            </button>
+            <button className="inline-flex items-center gap-2 rounded-lg border border-[#e4eae6] px-3 py-2 text-xs text-[#647269]">This week <ChevronDown size={14} /></button>
           </div>
           <div className="flex h-48 items-end gap-3 border-b border-[#e5ebe7] px-1 sm:gap-5">
             {barValues.map((height, index) => (
-              <div
-                key={index}
-                className="flex h-full flex-1 flex-col items-center justify-end gap-2"
-              >
-                <div
-                  className="w-full max-w-10 rounded-t-md bg-[#d8eee2] transition hover:bg-[#82bda2]"
-                  style={{ height: `${height}%` }}
-                  title={`Day ${index + 1}`}
-                />
-                <span className="pb-2 text-[11px] text-[#7c8981]">
-                  {["Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Mon"][index]}
-                </span>
+              <div key={index} className="flex h-full flex-1 flex-col items-center justify-end gap-2">
+                <div className="w-full max-w-10 rounded-t-md bg-[#d8eee2] transition hover:bg-[#82bda2]" style={{ height: `${height}%` }} title={`Day ${index + 1}`} />
+                <span className="pb-2 text-[11px] text-[#7c8981]">{["Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Mon"][index]}</span>
               </div>
             ))}
           </div>
-          <div className="mt-4 flex items-center gap-2 text-xs text-[#718078]">
-            <span className="size-2 rounded-full bg-[#72ae91]" />
-            Revenue{" "}
-            <span className="ml-auto font-medium text-[#35443b]">
-              {formatMoney(revenue)}
-            </span>
-          </div>
+          <div className="mt-4 flex items-center gap-2 text-xs text-[#718078]"><span className="size-2 rounded-full bg-[#72ae91]" />Revenue <span className="ml-auto font-medium text-[#35443b]">{formatMoney(revenue)}</span></div>
         </Panel>
+
         <Panel className="p-4 sm:p-5">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="font-semibold text-[#25332b]">Room status</h2>
-              <p className="mt-1 text-xs text-[#7a8880]">
-                Current availability
-              </p>
+              <p className="mt-1 text-xs text-[#7a8880]">Current availability</p>
             </div>
-            <button
-              onClick={() => onNavigate("rooms")}
-              className="text-sm font-medium text-[#176b54] hover:underline"
-            >
-              View rooms
-            </button>
+            <button onClick={() => onNavigate("rooms")} className="text-sm font-medium text-[#176b54] hover:underline">View rooms</button>
           </div>
           <div className="my-4 flex items-center justify-center">
-            <div
-              className="grid size-36 place-items-center rounded-full"
-              style={{
-                background: `conic-gradient(#d8ee82 ${occupancy}%, #dff2e7 ${occupancy}% 100%)`,
-              }}
-            >
+            <div className="grid size-36 place-items-center rounded-full" style={{ background: `conic-gradient(#d8ee82 ${occupancy}%, #dff2e7 ${occupancy}% 100%)`, }}>
               <div className="grid size-24 place-items-center rounded-full bg-white text-center">
-                <span className="text-3xl font-semibold text-[#26342d]">
-                  {occupancy}%
-                </span>
+                <span className="text-3xl font-semibold text-[#26342d]">{occupancy}%</span>
                 <span className="text-[10px] text-[#7b8981]">occupied</span>
               </div>
             </div>
           </div>
           <div className="space-y-2.5 border-t border-[#edf1ee] pt-3 text-sm">
-            <div className="flex justify-between text-[#718078]">
-              <span>Occupied</span>
-              <b className="font-medium text-[#26342d]">{occupied} units</b>
-            </div>
-            <div className="flex justify-between text-[#718078]">
-              <span>Available / inspected</span>
-              <b className="font-medium text-[#26342d]">
-                {
-                  inventoryUnits.filter((unit) =>
-                    ["available", "inspected"].includes(unit.status),
-                  ).length
-                }{" "}
-                units
-              </b>
-            </div>
-            <div className="flex justify-between text-[#718078]">
-              <span>Out of order</span>
-              <b className="font-medium text-[#26342d]">
-                {
-                  inventoryUnits.filter((unit) => unit.status === "out_of_order")
-                    .length
-                }{" "}
-                unit
-              </b>
-            </div>
+            <div className="flex justify-between text-[#718078]"><span>Occupied</span><b className="font-medium text-[#26342d]">{occupied} units</b></div>
+            <div className="flex justify-between text-[#718078]"><span>Available / inspected</span><b className="font-medium text-[#26342d]">{inventoryUnits.filter((unit) => ["available", "inspected"].includes(unit.status)).length} units</b></div>
+            <div className="flex justify-between text-[#718078]"><span>Out of order</span><b className="font-medium text-[#26342d]">{inventoryUnits.filter((unit) => unit.status === "out_of_order").length} unit</b></div>
           </div>
         </Panel>
       </div>
+
       <div className="mt-4 grid gap-4 xl:grid-cols-[1.45fr_1fr]">
         <Panel>
           <div className="flex items-center justify-between gap-3 px-4 py-4 sm:px-5">
             <div>
-              <h2 className="font-semibold text-[#25332b]">
-                Recent reservations
-              </h2>
-              <p className="mt-1 text-xs text-[#7a8880]">
-                Latest booking activity
-              </p>
+              <h2 className="font-semibold text-[#25332b]">Recent reservations</h2>
+              <p className="mt-1 text-xs text-[#7a8880]">Latest booking activity</p>
             </div>
-            <button
-              onClick={() => onNavigate("bookings")}
-              className="text-sm font-medium text-[#176b54] hover:underline"
-            >
-              All bookings
-            </button>
+            <button onClick={() => onNavigate("bookings")} className="text-sm font-medium text-[#176b54] hover:underline">All bookings</button>
           </div>
-          <DataTable
-            columns={[
-              { key: "id", label: "Booking ID" },
-              {
-                key: "guest",
-                label: "Guest",
-                render: (row) => guestFor(data, row.guestId)?.name,
-              },
-              {
-                key: "unit",
-                label: "Unit",
-                render: (row) => unitFor(data, row.unitId)?.number,
-              },
-              {
-                key: "dates",
-                label: "Stay",
-                render: (row) =>
-                  `${formatDate(row.checkIn)} – ${formatDate(row.checkOut)}`,
-              },
-              {
-                key: "status",
-                label: "Status",
-                render: (row) => <Status value={row.status} />,
-              },
-              {
-                key: "total",
-                label: "Total",
-                render: (row) => formatMoney(row.totalKobo),
-              },
-            ]}
-            rows={recent}
-          />
+          <DataTable columns={[{ key: "id", label: "Booking ID" }, { key: "guest", label: "Guest", render: (row) => guestFor(data, row.guestId)?.name }, { key: "unit", label: "Unit", render: (row) => unitFor(data, row.unitId)?.number }, { key: "dates", label: "Stay", render: (row) => `${formatDate(row.checkIn)} – ${formatDate(row.checkOut)}` }, { key: "status", label: "Status", render: (row) => <Status value={row.status} /> }, { key: "total", label: "Total", render: (row) => formatMoney(row.totalKobo) }]} rows={recent} />
         </Panel>
+
         <Panel className="p-4 sm:p-5">
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h2 className="font-semibold text-[#25332b]">Today’s arrivals</h2>
-              <p className="mt-1 text-xs text-[#7a8880]">
-                {arrivals} expected today
-              </p>
+              <p className="mt-1 text-xs text-[#7a8880]">{arrivals} expected today</p>
             </div>
-            <span className="grid size-9 place-items-center rounded-lg bg-[#edf6f0] text-[#176b54]">
-              <Users size={18} />
-            </span>
+            <span className="grid size-9 place-items-center rounded-lg bg-[#edf6f0] text-[#176b54]"><Users size={18} /></span>
           </div>
-          {data.bookings.filter(
-            (booking) =>
-              booking.checkIn === TODAY && booking.status === "confirmed",
-          ).length ? (
-            data.bookings
-              .filter(
-                (booking) =>
-                  booking.checkIn === TODAY && booking.status === "confirmed",
-              )
-              .map((booking) => (
-                <div
-                  key={booking.id}
-                  className="flex items-center gap-3 border-t border-[#edf1ee] py-3"
-                >
-                  <span className="grid size-9 place-items-center rounded-full bg-[#e8f3ec] text-xs font-semibold text-[#23694f]">
-                    {initials(guestFor(data, booking.guestId)?.name)}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-[#344239]">
-                      {guestFor(data, booking.guestId)?.name}
-                    </p>
-                    <p className="text-xs text-[#7b8981]">
-                      Unit {unitFor(data, booking.unitId)?.number} ·{" "}
-                      {booking.adults} adults
-                    </p>
-                  </div>
-                  <Button
-                    variant="secondary"
-                    className="min-h-8 px-2.5 text-xs"
-                    onClick={() => onBookingAction(booking, "checkin")}
-                  >
-                    Check in
-                  </Button>
-                </div>
-              ))
+          {data.bookings.filter((booking) => booking.checkIn === TODAY && booking.status === "confirmed").length ? (
+            data.bookings.filter((booking) => booking.checkIn === TODAY && booking.status === "confirmed").map((booking) => (
+              <div key={booking.id} className="flex items-center gap-3 border-t border-[#edf1ee] py-3">
+                <span className="grid size-9 place-items-center rounded-full bg-[#e8f3ec] text-xs font-semibold text-[#23694f]">{initials(guestFor(data, booking.guestId)?.name)}</span>
+                <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-[#344239]">{guestFor(data, booking.guestId)?.name}</p><p className="text-xs text-[#7b8981]">Unit {unitFor(data, booking.unitId)?.number} · {booking.adults} adults</p></div>
+                <Button variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => onBookingAction(booking, "checkin")}>Check in</Button>
+              </div>
+            ))
           ) : (
-            <EmptyPanel
-              icon={CalendarDays}
-              title="No arrivals due"
-              detail="New confirmed arrivals will appear here."
-            />
+            <EmptyPanel icon={CalendarDays} title="No arrivals due" detail="New confirmed arrivals will appear here." />
           )}
         </Panel>
       </div>
+
+      {activeFnbOrders.length > 0 && (
+        <Panel className="mt-4 border-[#dfeadf] bg-[#f8faf8] p-4 sm:p-5">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold text-[#25332b]">Food & drink queue</h2>
+              <p className="mt-1 text-xs text-[#7a8880]">A read-only view for operations and managers.</p>
+            </div>
+            <Button variant="secondary" onClick={() => onNavigate("restaurant")}><Utensils size={16} />Open orders</Button>
+          </div>
+          <div className="space-y-2.5">
+            {activeFnbOrders.map((order) => (
+              <div key={order.id} className="flex items-center justify-between gap-3 rounded-lg border border-[#e7eee8] bg-white px-3 py-2.5">
+                <div>
+                  <p className="text-sm font-medium text-[#2f3d36]">{order.orderNumber || order.id}</p>
+                  <p className="text-xs text-[#718078]">{order.items?.length || 0} item{(order.items?.length || 0) === 1 ? "" : "s"} · {order.paymentMethod || "N/A"}</p>
+                </div>
+                <Status value={order.status} />
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
     </div>
   );
 }
@@ -2345,6 +2314,7 @@ function RoomsPage({
             <div>
               <p className="text-xs capitalize text-[#77857d]">
                 {status.replaceAll("_", " ")}
+      <LowStockRestockBanner items={lowStockItems} role={role} onNavigate={onNavigate} onRequestRestock={onRequestRestock} />
               </p>
               <p className="mt-1 text-2xl font-semibold text-[#27362e]">
                 {value}
@@ -2988,7 +2958,7 @@ function InventoryPage({ data, role, search, onSearch, onCreate, onStock, batche
   );
 }
 
-function PurchasingPage({ data, role, onCreate, onPurchaseAction }) {
+function PurchasingPage({ data, role, onCreate, onPurchaseAction, restockRequests, onRestockAction }) {
   return (
     <>
       <PageHeader
@@ -3028,6 +2998,14 @@ function PurchasingPage({ data, role, onCreate, onPurchaseAction }) {
           </div>
         </Panel>
       </div>
+      {restockRequests.some((request) => !["received", "declined"].includes(request.status)) && <Panel className="mb-4 p-4 sm:p-5">
+        <div className="mb-3"><h2 className="font-semibold text-[#25332b]">Worker restock requests</h2><p className="mt-1 text-xs text-[#7a8880]">Review requests and update their progress.</p></div>
+        <div className="divide-y divide-[#e8eeea]">{restockRequests.filter((request) => !["received", "declined"].includes(request.status)).map((request) => {
+          const nextStatus = { requested: "reviewing", reviewing: "ordered", ordered: "received" }[request.status];
+          const actionLabel = { reviewing: "Start review", ordered: "Mark ordered", received: "Mark received" }[nextStatus];
+          return <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-1 last:pb-1"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold text-[#2c3b34]">{request.requesterName} · {request.id}</p><Status value={request.status} /></div><p className="mt-1 text-xs text-[#77857d]">{request.items.map((item) => `${item.name}: ${item.quantity} ${item.unit} (min ${item.minimum})`).join(" · ")}</p>{request.managerNote && <p className="mt-1 text-xs text-[#58685e]">Note: {request.managerNote}</p>}</div><div className="flex gap-2"><Button variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => onRestockAction(request, nextStatus)}>{actionLabel}</Button><button type="button" className="px-2 text-xs font-medium text-rose-700 hover:underline" onClick={() => onRestockAction(request, "declined")}>Decline</button></div></div>;
+        })}</div>
+      </Panel>}
       <Panel>
         <div className="px-4 py-4 sm:px-5">
           <h2 className="font-semibold text-[#28362e]">Purchase orders</h2>
@@ -4047,8 +4025,7 @@ function TeamPage({ data, role, onCreate, onSettings, onUserToggle, onSetPasswor
         <div className="flex gap-3">
           <ShieldCheck size={18} className="shrink-0 text-[#176b54]" />
           <p>
-            The role selector is still a preview control, not a secure sign-in.
-            Production authentication and server-enforced identity are still required.
+            Staff sign in with individual passwords. CEO and managers can assign or reset passwords in Team & settings. Deploy behind HTTPS, set TRUST_PROXY_HOPS to your exact reverse-proxy count, and restrict access to the API and database.
           </p>
         </div>
       </Panel>
@@ -4096,8 +4073,8 @@ function LoginScreen({ onLogin }) {
             Continue to the operations dashboard.
           </p>
           <form onSubmit={submit} className="mt-6 space-y-4">
-            <InputField field={{ name: "email", label: "Username", type: "email", autoComplete: "username" }} value={email} onChange={(event) => setEmail(event.target.value)} />
-            <InputField field={{ name: "password", label: "Password", type: "password", autoComplete: "current-password" }} value={password} onChange={(event) => setPassword(event.target.value)} />
+            <InputField field={{ name: "email", label: "Work email", type: "email" }} value={email} onChange={(event) => setEmail(event.target.value)} />
+            <InputField field={{ name: "password", label: "Password", type: "password" }} value={password} onChange={(event) => setPassword(event.target.value)} />
             {error && (
               <p role="alert" className="text-sm text-rose-700">
                 {error}
@@ -4108,7 +4085,7 @@ function LoginScreen({ onLogin }) {
             </Button>
           </form>
           <p className="mt-5 rounded-lg bg-[#f4f7f4] p-3 text-xs leading-5 text-[#718078]">
-            Sign in with your registered username and password.
+            Use the password assigned to your staff account. Ask a manager or CEO to reset it if needed.
           </p>
         </Panel>
         <p className="mt-4 text-center text-xs text-[#839087]">
@@ -4166,6 +4143,7 @@ function App() {
   const [data, setData] = useState(readDemoData);
   const initialData = useRef(data);
   const [page, setPage] = useState("dashboard");
+  const [isPropertyWebsite, setIsPropertyWebsite] = useState(() => window.location.pathname === "/");
   const [role, setRole] = useState("worker");
   const [currentUserId, setCurrentUserId] = useState("");
   const [signedIn, setSignedIn] = useState(false);
@@ -4183,6 +4161,7 @@ function App() {
   const [fnbData, setFnbData] = useState({ categories: [], menuItems: [], orders: [], batches: [], minibarMovements: [] });
   const [fnbLoading, setFnbLoading] = useState(true);
   const [systemNotifications, setSystemNotifications] = useState([]);
+  const [restockRequests, setRestockRequests] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4201,6 +4180,12 @@ function App() {
   }, []);
 
   useEffect(() => {
+    document.title = isPropertyWebsite
+      ? "Boms Apartment | The Haven of Hospitality"
+      : "Boms Apartment | Operations";
+  }, [isPropertyWebsite]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => setLagosClock(getLagosDateTime()), 30000);
     return () => window.clearInterval(timer);
   }, []);
@@ -4212,6 +4197,8 @@ function App() {
       if (!operationsResponse.ok) return;
       const notificationsResponse = await fetch("/api/notifications");
       if (notificationsResponse.ok) setSystemNotifications(await notificationsResponse.json());
+      const restockResponse = await fetch("/api/restock-requests");
+      if (restockResponse.ok) setRestockRequests(await restockResponse.json());
     };
     const timer = window.setInterval(() => { void refreshStockAlerts(); }, 30000);
     return () => window.clearInterval(timer);
@@ -4219,6 +4206,7 @@ function App() {
 
   useEffect(() => {
     if (!signedIn) return;
+    if (window.location.pathname === "/") return;
     const routePage = resolvePageFromRoute(`${window.location.pathname}${window.location.hash}`);
     if (routePage && pageNames[routePage] && routePage !== page) {
       setPage(routePage);
@@ -4232,6 +4220,7 @@ function App() {
   useEffect(() => {
     if (!signedIn) return;
     const handlePopState = () => {
+      setIsPropertyWebsite(window.location.pathname === "/");
       const routePage = resolvePageFromRoute(`${window.location.pathname}${window.location.hash}`);
       if (routePage && pageNames[routePage]) {
         setPage(routePage);
@@ -4267,7 +4256,7 @@ function App() {
           }),
         });
         if (!bootstrapResponse.ok) throw new Error("Demo operations data could not be moved into the database.");
-        const [roomsResponse, reservationsResponse, blocksResponse, operationsResponse, guestsResponse, fnbResponse, workspaceResponse, notificationsResponse] = await Promise.all([
+        const [roomsResponse, reservationsResponse, blocksResponse, operationsResponse, guestsResponse, fnbResponse, workspaceResponse, notificationsResponse, restockResponse] = await Promise.all([
           fetch("/api/rooms"),
           fetch("/api/reservations"),
           fetch("/api/blocks"),
@@ -4276,8 +4265,9 @@ function App() {
           fetch("/api/fnb"),
           fetch("/api/workspace"),
           fetch("/api/notifications"),
+          fetch("/api/restock-requests"),
         ]);
-        if (!roomsResponse.ok || !reservationsResponse.ok || !blocksResponse.ok || !operationsResponse.ok || !guestsResponse.ok || !fnbResponse.ok || !workspaceResponse.ok || !notificationsResponse.ok) {
+        if (!roomsResponse.ok || !reservationsResponse.ok || !blocksResponse.ok || !operationsResponse.ok || !guestsResponse.ok || !fnbResponse.ok || !workspaceResponse.ok || !notificationsResponse.ok || !restockResponse.ok) {
           throw new Error("The room database could not be loaded.");
         }
         const rooms = await roomsResponse.json();
@@ -4288,6 +4278,7 @@ function App() {
         const fnb = await fnbResponse.json();
         const workspace = await workspaceResponse.json();
         const notifications = await notificationsResponse.json();
+        const loadedRestockRequests = await restockResponse.json();
         const allDatabaseGuests = [
           ...databaseGuests,
           ...reservations.filter((booking) => booking.guest).map((booking) => ({ ...booking.guest, databaseGuest: true })),
@@ -4316,6 +4307,7 @@ function App() {
         setDatabaseRooms(rooms.map((room) => ({ ...room, databaseRoom: true })));
         setFnbData(fnb);
         setSystemNotifications(notifications);
+        setRestockRequests(loadedRestockRequests);
         setRoomsError("");
         setData((current) => {
           const bookingsById = new Map(current.bookings.map((booking) => [booking.id, booking]));
@@ -4412,17 +4404,19 @@ function App() {
     return result;
   }
   async function refreshPersistentOperations() {
-    const [response, fnbResponse, reservationsResponse, workspaceResponse] = await Promise.all([
+    const [response, fnbResponse, reservationsResponse, workspaceResponse, restockResponse] = await Promise.all([
       fetch("/api/operations"),
       fetch("/api/fnb"),
       fetch("/api/reservations"),
       fetch("/api/workspace"),
+      fetch("/api/restock-requests"),
     ]);
-    if (!response.ok || !fnbResponse.ok || !reservationsResponse.ok || !workspaceResponse.ok) throw new Error("Saved operations data could not be refreshed.");
+    if (!response.ok || !fnbResponse.ok || !reservationsResponse.ok || !workspaceResponse.ok || !restockResponse.ok) throw new Error("Saved operations data could not be refreshed.");
     const operations = await response.json();
     const fnb = await fnbResponse.json();
     const reservations = await reservationsResponse.json();
     const workspace = await workspaceResponse.json();
+    setRestockRequests(await restockResponse.json());
     const notificationsResponse = await fetch("/api/notifications");
     if (notificationsResponse.ok) setSystemNotifications(await notificationsResponse.json());
     setFnbData(fnb);
@@ -4617,6 +4611,7 @@ function App() {
     ]);
   }
   function navigate(nextPage) {
+    setIsPropertyWebsite(false);
     setPage(nextPage);
     setSearch("");
     setMobileNavOpen(false);
@@ -4652,18 +4647,39 @@ function App() {
       notify(error.message);
     }
   }
-  async function signIn(username, password) {
+  async function requestRestock() {
+    try {
+      const result = await writeApi("/api/restock-requests", "POST", {});
+      setRestockRequests((items) => [result, ...items.filter((item) => item.id !== result.id)]);
+      notify("Restock request sent to management.");
+    } catch (error) {
+      notify(error.message);
+    }
+  }
+  async function updateRestockRequest(request, status) {
+    try {
+      const updated = await writeApi(`/api/restock-requests/${encodeURIComponent(request.id)}/status`, "PATCH", { status });
+      setRestockRequests((items) => items.map((item) => item.id === updated.id ? updated : item));
+      const notificationsResponse = await fetch("/api/notifications");
+      if (notificationsResponse.ok) setSystemNotifications(await notificationsResponse.json());
+      notify(`Restock request ${status}.`);
+    } catch (error) {
+      notify(error.message);
+    }
+  }
+  async function signIn(email, password) {
     try {
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: username, password }),
+        body: JSON.stringify({ email, password }),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) return { error: result.error || "Sign in failed." };
       setCurrentUserId(result.user.id);
       setRole(result.user.role);
       setSignedIn(true);
+      setIsPropertyWebsite(false);
       setPage("dashboard");
       window.history.replaceState({}, "", appRoutes.dashboard);
       return {};
@@ -4676,6 +4692,7 @@ function App() {
     setSignedIn(false);
     setCurrentUserId("");
     setRole("worker");
+    setIsPropertyWebsite(false);
     setPage("dashboard");
     window.history.replaceState({}, "", "/login");
   }
@@ -5663,6 +5680,17 @@ function App() {
     );
   }
 
+  async function guestRequestAction(request, status) {
+    try {
+      await writeApi(`/api/concierge/${encodeURIComponent(request.id)}/status`, "PATCH", { status });
+      updateList("requests", (items) => items.map((item) => item.id === request.id ? { ...item, status } : item));
+      if (status === "done" && request.costKobo) await refreshPersistentOperations();
+      notify(status === "done" && request.costKobo ? `${formatMoney(request.costKobo)} added to the guest folio.` : `Request ${status}.`);
+    } catch (error) {
+      notify(error.message);
+    }
+  }
+
   async function purchaseAction(order, status) {
     if (status === "approved" && !allowed(role, "purchase")) {
       notify("Only a manager or CEO can approve purchase orders.");
@@ -5991,12 +6019,18 @@ function App() {
           databaseRooms={databaseRooms}
           fnbData={fnbData}
           fnbLoading={fnbLoading}
+          restockRequests={restockRequests}
           userName={currentUser.name}
+          role={role}
           onNavigate={navigate}
           onCreate={requestCreate}
           onBookingAction={bookingAction}
           onExtendBooking={extendBookingStay}
           onSaveFnbOrder={createFnbOrder}
+          onRequestRestock={requestRestock}
+          onFnbStatus={updateFnbOrder}
+          onTaskAction={taskAction}
+          onRequestAction={guestRequestAction}
           canAddMenu={allowed(role, "stock")}
           onAddMenu={(preset = null) => setModal({ type: "fnbMenu", record: preset })}
           checkoutCalls={checkoutCalls}
@@ -6099,8 +6133,10 @@ function App() {
         <PurchasingPage
           data={data}
           role={role}
+          restockRequests={restockRequests}
           onCreate={requestCreate}
           onPurchaseAction={purchaseAction}
+          onRestockAction={updateRestockRequest}
         />
       );
       break;
@@ -6189,16 +6225,7 @@ function App() {
         <ConciergePage
           data={data}
           onCreate={requestCreate}
-          onRequestAction={async (request, status) => {
-            try {
-              await writeApi(`/api/concierge/${encodeURIComponent(request.id)}/status`, "PATCH", { status });
-              updateList("requests", (items) => items.map((item) => item.id === request.id ? { ...item, status } : item));
-              if (status === "done" && request.costKobo) await refreshPersistentOperations();
-              notify(status === "done" && request.costKobo ? `${formatMoney(request.costKobo)} added to the guest folio.` : `Request ${status}.`);
-            } catch (error) {
-              notify(error.message);
-            }
-          }}
+          onRequestAction={guestRequestAction}
         />
       );
       break;
@@ -6235,12 +6262,18 @@ function App() {
           databaseRooms={databaseRooms}
           fnbData={fnbData}
           fnbLoading={fnbLoading}
+          restockRequests={restockRequests}
           userName={currentUser.name}
+          role={role}
           onNavigate={navigate}
           onCreate={requestCreate}
           onBookingAction={bookingAction}
           onExtendBooking={extendBookingStay}
           onSaveFnbOrder={createFnbOrder}
+          onRequestRestock={requestRestock}
+          onFnbStatus={updateFnbOrder}
+          onTaskAction={taskAction}
+          onRequestAction={guestRequestAction}
           canAddMenu={allowed(role, "stock")}
           onAddMenu={(preset = null) => setModal({ type: "fnbMenu", record: preset })}
           checkoutCalls={checkoutCalls}
@@ -6250,6 +6283,7 @@ function App() {
       );
   }
 
+  if (isPropertyWebsite) return <PropertyWebsite />;
   if (authLoading) return <main className="grid min-h-screen place-items-center bg-[#f1f5f1] text-sm text-[#718078]">Checking staff session…</main>;
   if (!signedIn) return <LoginScreen onLogin={signIn} />;
 
@@ -6379,12 +6413,12 @@ function App() {
                     })}
                     {unreadSystemNotifications.map((notification) => (
                       <div key={notification.id} className="mb-2 rounded-lg border border-rose-300 bg-rose-50 p-3">
-                        <p className="text-xs font-semibold uppercase text-rose-800">Stock alert</p>
+                        <p className="text-xs font-semibold uppercase text-rose-800">{notification.type.startsWith("restock_request:") ? "Restock request" : notification.type.startsWith("restock_update:") ? "Restock update" : "Stock alert"}</p>
                         <p className="mt-1 text-sm font-semibold text-rose-950">{notification.title}</p>
                         <p className="mt-1 text-xs text-rose-900">{notification.body}</p>
                         <div className="mt-2 flex items-center justify-between gap-2">
-                          <button onClick={() => { navigate("inventory"); setNotificationsOpen(false); }} className="text-xs font-semibold text-rose-900 underline">Open inventory</button>
-                          <button onClick={() => markNotificationRead(notification)} aria-label="Mark stock alert as read" className="text-xs font-medium text-rose-800">Mark read</button>
+                          <button onClick={() => { navigate(notification.type.startsWith("restock_request:") ? "purchasing" : notification.type.startsWith("restock_update:") ? "dashboard" : "inventory"); setNotificationsOpen(false); }} className="text-xs font-semibold text-rose-900 underline">{notification.type.startsWith("restock_request:") ? "Open purchasing" : notification.type.startsWith("restock_update:") ? "View dashboard" : "Open inventory"}</button>
+                          <button onClick={() => markNotificationRead(notification)} aria-label="Mark notification as read" className="text-xs font-medium text-rose-800">Mark read</button>
                         </div>
                       </div>
                     ))}
