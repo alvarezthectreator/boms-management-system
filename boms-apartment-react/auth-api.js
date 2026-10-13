@@ -50,7 +50,7 @@ async function findSessionUser(database, propertyId, token) {
 export function requireAuthenticatedUser(database, propertyId) {
   return async (request, response, next) => {
     const requestPath = request.path || "";
-    if (requestPath === "/health" || requestPath.startsWith("/auth/")) return next();
+    if (requestPath === "/health" || requestPath.startsWith("/auth/") || requestPath.startsWith("/public/")) return next();
     try {
       const user = await findSessionUser(database, propertyId, readCookie(request, sessionCookie));
       if (!user) return response.status(401).json({ error: "Sign in to continue." });

@@ -59,6 +59,34 @@ test("public website lists room types without exposing unit occupancy", async ()
   database.close();
 });
 
+test("public room endpoint bypasses auth middleware", async () => {
+  const database = createTestDatabase();
+  const request = {
+    path: "/public/rooms",
+    get: () => "",
+    headers: {},
+    ip: "test",
+  };
+  const response = {
+    code: 200,
+    status(code) {
+      this.code = code;
+      return this;
+    },
+    json(value) {
+      this.body = value;
+      return this;
+    },
+  };
+  let nextCalled = false;
+  await createAuthMiddleware(database, propertyId)(request, response, () => {
+    nextCalled = true;
+  });
+  assert.equal(response.code, 200);
+  assert.equal(nextCalled, true);
+  database.close();
+});
+
 function headers(role = "worker", name = "Test User", idempotencyKey = "", userId = "") {
   return {
     "x-test-role": role,
