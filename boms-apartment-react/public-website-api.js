@@ -55,13 +55,16 @@ export function registerPublicWebsiteRoutes(app, database, propertyId) {
       `, [propertyId]);
 
       return rows.map((room) => {
-        let images = [];
-        try {
-          const parsed = JSON.parse(room.photos_json || "[]");
-          if (Array.isArray(parsed)) images = parsed.filter((image) => typeof image === "string");
-        } catch {
-          images = [];
+        let images = Array.isArray(room.photos_json) ? room.photos_json : [];
+        if (!Array.isArray(room.photos_json)) {
+          try {
+            const parsed = JSON.parse(room.photos_json || "[]");
+            if (Array.isArray(parsed)) images = parsed;
+          } catch {
+            images = [];
+          }
         }
+        images = images.filter((image) => typeof image === "string");
         return {
           id: room.id,
           name: room.name,

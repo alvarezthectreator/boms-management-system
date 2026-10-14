@@ -511,7 +511,6 @@ function BookingDialog({ data, role, onClose, onSave, record }) {
   const initialCheckOut = record?.checkOut || defaultCheckoutDate(initialCheckIn);
   const [checkIn, setCheckIn] = useState(initialCheckIn);
   const [checkOut, setCheckOut] = useState(initialCheckOut);
-  const initialUnit = record && unitFor(data, record.unitId);
   const [unitId, setUnitId] = useState(record?.unitId || "");
   const [guestId, setGuestId] = useState(record?.guestId || data.guests[0]?.id || "");
   const [adults, setAdults] = useState(record?.adults || 1);
@@ -769,12 +768,18 @@ function BookingDialog({ data, role, onClose, onSave, record }) {
 }
 
 function RoomEditorDialog({ room, onClose, onSave }) {
-  const [imageUrl, setImageUrl] = useState(room.images?.[0] || "");
+  const [name, setName] = useState(room?.name || "");
+  const [number, setNumber] = useState(room?.number || "");
+  const [floor, setFloor] = useState(room?.floor || "");
+  const [sizeM2, setSizeM2] = useState(room?.sizeM2 || "");
+  const [maxGuests, setMaxGuests] = useState(room?.maxGuests || 2);
+  const [description, setDescription] = useState(room?.description || "");
+  const [imageUrl, setImageUrl] = useState(room?.images?.[0] || "");
   const [imageDataUrl, setImageDataUrl] = useState("");
   const [rateNaira, setRateNaira] = useState(
-    room.rateKobo ? String(room.rateKobo / 100) : "",
+    room?.rateKobo ? String(room.rateKobo / 100) : "",
   );
-  const [sharedBedType, setSharedBedType] = useState(room.bedType || "");
+  const [bedType, setBedType] = useState(room?.bedType || "");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -797,17 +802,19 @@ function RoomEditorDialog({ room, onClose, onSave }) {
 
   async function submit(event) {
     event.preventDefault();
-    if (!imageDataUrl && !imageUrl.trim()) {
-      setError("Choose an image or enter an HTTPS image URL.");
-      return;
-    }
     setSaving(true);
     setError("");
     const result = await onSave(room, {
+      name,
+      number,
+      floor,
+      sizeM2,
+      maxGuests,
+      description,
       imageDataUrl,
       imageUrl: imageDataUrl ? "" : imageUrl.trim(),
       rateNaira,
-      sharedBedType: sharedBedType.trim() || undefined,
+      bedType,
     });
     setSaving(false);
     if (result?.error) setError(result.error);
@@ -816,23 +823,33 @@ function RoomEditorDialog({ room, onClose, onSave }) {
 
   return (
     <ModalFrame
-      title={`Edit ${room.name}`}
-      description="Room photos and rates are saved to the hotel database."
+      title={room ? `Edit ${room.name}` : "Add a room"}
+      description="Room details and photos are saved to the property database."
       onClose={onClose}
     >
       <form onSubmit={submit} className="space-y-5 p-5 sm:p-6">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="block text-sm font-medium text-[#34443a]">Room name<input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Azure" className="mt-1.5 min-h-10 w-full rounded-lg border border-[#dfe7e1] px-3 text-sm" /></label>
+          <label className="block text-sm font-medium text-[#34443a]">Room number or code<input required maxLength={40} value={number} onChange={(event) => setNumber(event.target.value)} placeholder="e.g. Azure" className="mt-1.5 min-h-10 w-full rounded-lg border border-[#dfe7e1] px-3 text-sm" /></label>
+          <label className="block text-sm font-medium text-[#34443a]">Floor<input type="number" min="0" value={floor} onChange={(event) => setFloor(event.target.value)} className="mt-1.5 min-h-10 w-full rounded-lg border border-[#dfe7e1] px-3 text-sm" /></label>
+          <label className="block text-sm font-medium text-[#34443a]">Size (m²)<input type="number" min="0" step="any" value={sizeM2} onChange={(event) => setSizeM2(event.target.value)} className="mt-1.5 min-h-10 w-full rounded-lg border border-[#dfe7e1] px-3 text-sm" /></label>
+          <label className="block text-sm font-medium text-[#34443a]">Nightly rate (₦)<input required type="number" min="1" step="any" value={rateNaira} onChange={(event) => setRateNaira(event.target.value)} className="mt-1.5 min-h-10 w-full rounded-lg border border-[#dfe7e1] px-3 text-sm" /></label>
+          <label className="block text-sm font-medium text-[#34443a]">Maximum guests<input required type="number" min="1" max="20" step="1" value={maxGuests} onChange={(event) => setMaxGuests(event.target.value)} className="mt-1.5 min-h-10 w-full rounded-lg border border-[#dfe7e1] px-3 text-sm" /></label>
+          <label className="block text-sm font-medium text-[#34443a] sm:col-span-2">Bed type<input required maxLength="80" value={bedType} onChange={(event) => setBedType(event.target.value)} placeholder="e.g. King bed" className="mt-1.5 min-h-10 w-full rounded-lg border border-[#dfe7e1] px-3 text-sm" /></label>
+          <label className="block text-sm font-medium text-[#34443a] sm:col-span-2">Description<textarea rows="2" maxLength="1000" value={description} onChange={(event) => setDescription(event.target.value)} className="mt-1.5 w-full rounded-lg border border-[#dfe7e1] px-3 py-2 text-sm" /></label>
+        </div>
         <div className="aspect-[16/9] overflow-hidden rounded-lg bg-[#edf2ed]">
           {(imageDataUrl || imageUrl) && (
             <img
               src={imageDataUrl || imageUrl}
-              alt={`${room.name} room preview`}
+              alt={`${name || "Room"} preview`}
               className="h-full w-full object-cover"
             />
           )}
         </div>
         <label className="block text-sm font-medium text-[#34443a]">
           Upload a room photo
-          <span className="mt-1 block text-xs font-normal text-[#718078]">JPG, PNG, or WebP. Maximum 5 MB.</span>
+          <span className="mt-1 block text-xs font-normal text-[#718078]">Optional. JPG, PNG, or WebP, up to 5 MB.</span>
           <input
             type="file"
             accept="image/jpeg,image/png,image/webp"
@@ -841,7 +858,7 @@ function RoomEditorDialog({ room, onClose, onSave }) {
           />
         </label>
         <InputField
-          field={{ name: "imageUrl", label: "Or use an HTTPS image URL", required: false, type: "url" }}
+          field={{ name: "imageUrl", label: "Or use an HTTPS image URL", required: false }}
           value={imageUrl}
           onChange={(event) => {
             setImageUrl(event.target.value);
@@ -849,23 +866,13 @@ function RoomEditorDialog({ room, onClose, onSave }) {
           }}
         />
         <div className="grid gap-4 sm:grid-cols-2">
-          <InputField
-            field={{ name: "rateNaira", label: "Nightly rate (₦)", type: "number", min: 1, required: false }}
-            value={rateNaira}
-            onChange={(event) => setRateNaira(event.target.value)}
-          />
-          <InputField
-            field={{ name: "sharedBedType", label: "Shared bed size for all rooms", placeholder: "e.g. Queen bed", required: false }}
-            value={sharedBedType}
-            onChange={(event) => setSharedBedType(event.target.value)}
-          />
+          <p className="text-xs text-[#718078]">This room’s rate, bed type, and occupancy are managed separately.</p>
         </div>
-        <p className="text-xs text-[#718078]">Maximum occupancy is fixed at 3 guests per room.</p>
         {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
           <Button type="submit" disabled={saving}>
-            {saving ? "Saving…" : <><Upload size={16} />Save room</>}
+            {saving ? "Saving…" : <><Upload size={16} />{room ? "Save room" : "Create room"}</>}
           </Button>
         </div>
       </form>
@@ -2260,7 +2267,9 @@ function RoomsPage({
   onSearch,
   role,
   onCreate,
+  onCreateRoom,
   onEditRoom,
+  onDeleteRoom,
   onBlock,
   onUnitStatus,
   loading,
@@ -2278,11 +2287,14 @@ function RoomsPage({
     <>
       <PageHeader
         title="Rooms & units"
-        description="Thirteen named rooms, managed from the hotel database."
+        description="Manage room names, photos, rates, and availability."
         action={
-          <Button onClick={() => onCreate("booking")} disabled={!allowed(role, "booking")}>
-            <Plus size={16} />New reservation
-          </Button>
+          <div className="flex gap-2">
+            {role === "ceo" && <Button variant="secondary" onClick={onCreateRoom}><Plus size={16} />Add room</Button>}
+            <Button onClick={() => onCreate("booking")} disabled={!allowed(role, "booking")}>
+              <Plus size={16} />New reservation
+            </Button>
+          </div>
         }
       />
       {error && (
@@ -2330,16 +2342,10 @@ function RoomsPage({
                   />
                 )}
                 <div className="absolute left-3 top-3"><Status value={room.status} /></div>
-                {role === "ceo" && (
-                  <Button
-                    variant="secondary"
-                    className="absolute right-3 top-3 min-h-9 bg-white/95 px-3"
-                    onClick={() => onEditRoom(room)}
-                    title={`Edit ${room.name}`}
-                  >
-                    <ImagePlus size={16} />Edit room
-                  </Button>
-                )}
+                {role === "ceo" && <div className="absolute right-3 top-3 flex gap-2">
+                  <Button variant="secondary" className="min-h-9 bg-white/95 px-3" onClick={() => onEditRoom(room)} title={`Edit ${room.name}`}><ImagePlus size={16} />Edit room</Button>
+                  <Button variant="danger" className="min-h-9 bg-white/95 px-3" onClick={() => onDeleteRoom(room)} title={`Delete ${room.name}`}><X size={16} />Delete</Button>
+                </div>}
               </div>
               <div className="space-y-4 p-4">
                 <div className="flex items-start justify-between gap-3">
@@ -4526,34 +4532,77 @@ function App() {
     }
   }
   async function saveRoom(room, values) {
-    if (role !== "ceo") return { error: "Only an admin can edit room details." };
+    if (role !== "ceo") return { error: "Only an admin can manage rooms." };
     try {
-      const response = await fetch(`/api/rooms/${encodeURIComponent(room.id)}`, {
-        method: "PATCH",
+      const response = await fetch(room ? `/api/rooms/${encodeURIComponent(room.id)}` : "/api/rooms", {
+        method: room ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(values),
       });
-      const result = await response.json();
+      const result = await response.json().catch(() => ({}));
       if (!response.ok) return { error: result.error || "Room details could not be saved." };
-      setDatabaseRooms((current) => current.map((item) => item.id === result.id ? { ...result, databaseRoom: true } : item));
+      const savedRoom = { ...result, databaseRoom: true };
+      setDatabaseRooms((current) => room
+        ? current.map((item) => item.id === result.id ? savedRoom : item)
+        : [...current, savedRoom]);
+      const savedUnit = {
+        id: result.id,
+        name: result.name,
+        number: result.number,
+        roomTypeId: result.roomTypeId,
+        floor: result.floor || "—",
+        status: result.status,
+        rateKobo: result.rateKobo || 0,
+        maxGuests: result.maxGuests,
+        databaseRoom: true,
+      };
+      const savedType = {
+        id: result.roomTypeId,
+        name: result.roomTypeName,
+        size: result.sizeM2 || 0,
+        bed: result.bedType || "Same size, not specified",
+        guests: result.maxGuests,
+        rateKobo: result.rateKobo || 0,
+        description: result.description || "",
+        databaseRoomType: true,
+      };
       setData((current) => ({
         ...current,
-        units: current.units.map((unit) => unit.roomTypeId === result.roomTypeId
-          ? { ...unit, rateKobo: result.rateKobo || 0 }
-          : unit),
-        roomTypes: current.roomTypes.map((type) => type.databaseRoomType
-          ? {
-              ...type,
-              bed: result.bedType || type.bed,
-              rateKobo: type.id === result.roomTypeId ? result.rateKobo || 0 : type.rateKobo,
-            }
-          : type),
+        units: room
+          ? current.units.map((unit) => unit.id === result.id ? { ...unit, ...savedUnit } : unit)
+          : [...current.units.filter((unit) => unit.id !== result.id), savedUnit],
+        roomTypes: [...current.roomTypes.filter((type) => type.id !== savedType.id), savedType],
       }));
-      writeAudit("room", room.id, "room details updated", room, result);
-      notify(`${room.name} saved to the room database.`);
+      writeAudit("room", result.id, room ? "room details updated" : "room created", room, result);
+      notify(`${result.name} ${room ? "saved to" : "added to"} the room database.`);
       return {};
     } catch {
       return { error: "The room database is unavailable." };
+    }
+  }
+  async function deleteRoom(room) {
+    if (role !== "ceo" || !window.confirm(`Delete ${room.name}? Rooms with active reservations cannot be deleted.`)) return;
+    try {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(room.id)}`, { method: "DELETE" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        notify(result.error || "Room could not be deleted.");
+        return;
+      }
+      setDatabaseRooms((current) => current.filter((item) => item.id !== room.id));
+      setData((current) => {
+        const units = current.units.filter((unit) => unit.id !== room.id);
+        const roomTypeStillUsed = units.some((unit) => unit.roomTypeId === result.roomTypeId);
+        return {
+          ...current,
+          units,
+          roomTypes: roomTypeStillUsed ? current.roomTypes : current.roomTypes.filter((type) => type.id !== result.roomTypeId),
+        };
+      });
+      writeAudit("room", room.id, "room deleted", room, null);
+      notify(`${room.name} deleted.`);
+    } catch {
+      notify("The room database is unavailable.");
     }
   }
   async function updateDatabaseRoomStatus(room, status) {
@@ -6114,7 +6163,9 @@ function App() {
           onSearch={setSearch}
           role={role}
           onCreate={requestCreate}
+          onCreateRoom={() => setModal({ type: "roomEditor", record: null })}
           onEditRoom={(room) => setModal({ type: "roomEditor", record: room })}
+          onDeleteRoom={deleteRoom}
           onBlock={openBlock}
           onUnitStatus={updateDatabaseRoomStatus}
           loading={roomsLoading}
@@ -6553,7 +6604,7 @@ function App() {
         <FnbRefundDialog order={modal.record} onClose={() => setModal(null)} onSave={refundFnbOrder} />
       ) : modal?.type === "roomEditor" ? (
         <RoomEditorDialog
-          key={modal.record.id}
+          key={modal.record?.id || "new-room"}
           room={modal.record}
           onClose={() => setModal(null)}
           onSave={saveRoom}

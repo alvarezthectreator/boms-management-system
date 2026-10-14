@@ -110,8 +110,9 @@ async function listRooms() {
   const rows = await database.all(`
     SELECT
       units.id,
-      room_types.name AS name,
-      room_types.name AS number,
+      COALESCE(NULLIF(units.name, ''), room_types.name) AS name,
+      units.number,
+      units.floor,
       units.status,
       room_types.id AS room_type_id,
       room_types.name AS room_type_name,
@@ -162,9 +163,19 @@ async function listRooms() {
     maxGuests: room.max_guests || 3,
     description: room.description,
     rateKobo: room.base_rate_kobo,
-    images: JSON.parse(room.photos_json || "[]"),
+    images: roomImages(room.photos_json),
     activeReservations: activeReservationsByUnit.get(room.id) || 0,
   }));
+}
+
+function roomImages(value) {
+  if (Array.isArray(value)) return value.filter((image) => typeof image === "string");
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed.filter((image) => typeof image === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 async function getRoom(id, connection = database) {
@@ -178,10 +189,10 @@ async function getRoom(id, connection = database) {
   `, [id, propertyId]);
 }
 
-function parseImage(body, roomId) {
+function parseImage(body) {
   if (body.imageUrl) {
     const imageUrl = String(body.imageUrl).trim();
-    if (!imageUrl.startsWith("/") && !/^https:\/\//i.test(imageUrl)) {
+    if (!/^https:\/\//i.test(imageUrl)) {
       throw Object.assign(new Error("Use an HTTPS image URL."), { status: 400 });
     }
     return imageUrl;
@@ -195,12 +206,22 @@ function parseImage(body, roomId) {
   if (image.length > 5 * 1024 * 1024) {
     throw Object.assign(new Error("Images must be 5 MB or smaller."), { status: 413 });
   }
-  const folder = path.join(root, "public", "room-images");
-  fs.mkdirSync(folder, { recursive: true });
-  const extension = match[1] === "jpeg" ? "jpg" : match[1];
-  const fileName = `${roomId}-${Date.now()}.${extension}`;
-  fs.writeFileSync(path.join(folder, fileName), image);
-  return `/api/room-images/${fileName}`;
+  return body.imageDataUrl;
+}
+
+function cleanRoomValues(body) {
+  const name = String(body.name || "").trim();
+  const number = String(body.number || "").trim();
+  const rateNaira = Number(body.rateNaira);
+  const maxGuests = Number(body.maxGuests);
+  const sizeM2 = Number(body.sizeM2 || 0);
+  if (!name || !number) throw Object.assign(new Error("Enter a room name and room number."), { status: 400 });
+  if (!Number.isFinite(rateNaira) || rateNaira <= 0) throw Object.assign(new Error("Enter a nightly rate greater than zero."), { status: 400 });
+  if (!Number.isInteger(maxGuests) || maxGuests < 1 || maxGuests > 20) throw Object.assign(new Error("Maximum guests must be between 1 and 20."), { status: 400 });
+  if (!Number.isFinite(sizeM2) || sizeM2 < 0 || sizeM2 > 10000) throw Object.assign(new Error("Enter a valid room size."), { status: 400 });
+  const bedType = String(body.bedType || "").trim();
+  if (!bedType) throw Object.assign(new Error("Enter the bed type."), { status: 400 });
+  return { name, number, rateKobo: Math.round(rateNaira * 100), maxGuests, sizeM2, bedType, description: String(body.description || "").trim() };
 }
 
 function sendError(response, error) {
@@ -223,6 +244,35 @@ app.get("/api/rooms", async (_request, response) => {
   response.json(await listRooms());
 });
 
+app.post("/api/rooms", async (request, response) => {
+  if (request.user.role !== "ceo") return response.status(403).json({ error: "Only an admin can create rooms." });
+  try {
+    const values = cleanRoomValues(request.body);
+    const image = parseImage(request.body);
+    const idSuffix = crypto.randomUUID();
+    const roomTypeId = `RT-${idSuffix}`;
+    const unitId = `ROOM-${idSuffix}`;
+    const floor = request.body.floor === "" || request.body.floor == null ? null : Number(request.body.floor);
+    if (floor !== null && (!Number.isInteger(floor) || floor < 0)) return response.status(400).json({ error: "Enter a valid floor." });
+    await database.withTransaction(async (transaction) => {
+      await transaction.run(`
+        INSERT INTO room_types (id, property_id, name, size_m2, bed_type, max_guests, description, base_rate_kobo, photos_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [roomTypeId, propertyId, values.name, values.sizeM2, values.bedType, values.maxGuests, values.description,
+        values.rateKobo, JSON.stringify(image ? [image] : [])]);
+      await transaction.run(`
+        INSERT INTO units (id, property_id, name, number, floor, room_type_id, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'available', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [unitId, propertyId, values.name, values.number, floor, roomTypeId]);
+    });
+    const room = (await listRooms()).find((item) => item.id === unitId);
+    await writeAudit(request, "room", unitId, "created", null, room);
+    response.status(201).json(room);
+  } catch (error) {
+    sendError(response, error);
+  }
+});
+
 app.patch("/api/rooms/:id", async (request, response) => {
   try {
     if (request.user.role !== "ceo") {
@@ -231,32 +281,50 @@ app.patch("/api/rooms/:id", async (request, response) => {
     const room = await getRoom(request.params.id);
     if (!room) return response.status(404).json({ error: "Room not found." });
     const before = (await listRooms()).find((item) => item.id === room.id);
-    const imageUrl = parseImage(request.body, room.id);
-    const rateNaira = request.body.rateNaira;
-    const bedType = request.body.sharedBedType;
-    if (rateNaira !== undefined && rateNaira !== "" && (!Number.isFinite(Number(rateNaira)) || Number(rateNaira) <= 0)) {
-      return response.status(400).json({ error: "Enter a nightly rate greater than zero." });
-    }
-    if (bedType !== undefined && !String(bedType).trim()) {
-      return response.status(400).json({ error: "Enter the shared bed size." });
-    }
+    const values = cleanRoomValues(request.body);
+    const image = parseImage(request.body);
+    const floor = request.body.floor === "" || request.body.floor == null ? null : Number(request.body.floor);
+    if (floor !== null && (!Number.isInteger(floor) || floor < 0)) return response.status(400).json({ error: "Enter a valid floor." });
     await database.withTransaction(async (transaction) => {
-      if (imageUrl) {
-        await transaction.run("UPDATE room_types SET photos_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [JSON.stringify([imageUrl]), room.room_type_id]);
-      }
-      if (rateNaira !== undefined && rateNaira !== "") {
-        await transaction.run("UPDATE room_types SET base_rate_kobo = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [Math.round(Number(rateNaira) * 100), room.room_type_id]);
-      }
-      if (bedType !== undefined) {
-        await transaction.run(`
-          UPDATE room_types SET bed_type = ?, updated_at = CURRENT_TIMESTAMP
-          WHERE property_id = ? AND deleted_at IS NULL
-        `, [String(bedType).trim(), propertyId]);
-      }
+      await transaction.run(`
+        UPDATE room_types SET name = ?, size_m2 = ?, bed_type = ?, max_guests = ?, description = ?, base_rate_kobo = ?, updated_at = CURRENT_TIMESTAMP
+        ${image ? ", photos_json = ?" : ""}
+        WHERE id = ? AND property_id = ?
+      `, [...[values.name, values.sizeM2, values.bedType, values.maxGuests, values.description, values.rateKobo],
+        ...(image ? [JSON.stringify([image])] : []), room.room_type_id, propertyId]);
+      await transaction.run(`UPDATE units SET name = ?, number = ?, floor = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?`,
+        [values.name, values.number, floor, room.id, propertyId]);
     });
     const updated = (await listRooms()).find((item) => item.id === room.id);
     await writeAudit(request, "room", room.id, "updated", before, updated);
     response.json(updated);
+  } catch (error) {
+    sendError(response, error);
+  }
+});
+
+app.delete("/api/rooms/:id", async (request, response) => {
+  if (request.user.role !== "ceo") return response.status(403).json({ error: "Only an admin can delete rooms." });
+  try {
+    const room = await getRoom(request.params.id);
+    if (!room) return response.status(404).json({ error: "Room not found." });
+    const booking = await database.get(`
+      SELECT id FROM bookings WHERE unit_id = ? AND property_id = ? AND deleted_at IS NULL
+        AND status IN ('hold', 'confirmed', 'checked_in') LIMIT 1
+    `, [room.id, propertyId]);
+    if (booking) return response.status(409).json({ error: "This room has an active reservation. Cancel or move it before deleting the room." });
+    const before = (await listRooms()).find((item) => item.id === room.id);
+    await database.withTransaction(async (transaction) => {
+      await transaction.run("UPDATE units SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?", [room.id, propertyId]);
+      await transaction.run(`
+        UPDATE room_types SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND property_id = ? AND NOT EXISTS (
+          SELECT 1 FROM units WHERE room_type_id = ? AND property_id = ? AND deleted_at IS NULL
+        )
+      `, [room.room_type_id, propertyId, room.room_type_id, propertyId]);
+    });
+    await writeAudit(request, "room", room.id, "deleted", before, null);
+    response.json({ id: room.id, roomTypeId: room.room_type_id, deleted: true });
   } catch (error) {
     sendError(response, error);
   }
