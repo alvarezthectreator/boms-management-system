@@ -92,8 +92,11 @@ export default function PropertyWebsite() {
   const [rooms, setRooms] = useState([]);
   const [roomTypeId, setRoomTypeId] = useState("all");
   const [guests, setGuests] = useState(2);
+  const [showAllRooms, setShowAllRooms] = useState(false);
   const [roomsStatus, setRoomsStatus] = useState("loading");
   const closeMenu = () => setMenuOpen(false);
+  const chooseRoomType = (id) => { setRoomTypeId(id); setShowAllRooms(false); };
+  const chooseGuests = (count) => { setGuests(count); setShowAllRooms(false); };
 
   useEffect(() => {
     let cancelled = false;
@@ -119,6 +122,7 @@ export default function PropertyWebsite() {
   const visibleRooms = rooms.filter((room) =>
     (roomTypeId === "all" || room.id === roomTypeId) && room.maxGuests >= guests,
   );
+  const displayedRooms = showAllRooms ? visibleRooms : visibleRooms.slice(0, 6);
 
   return (
     <div className="galaxy-site">
@@ -166,9 +170,9 @@ export default function PropertyWebsite() {
           <StaySearch
             rooms={rooms}
             roomTypeId={roomTypeId}
-            onRoomTypeChange={setRoomTypeId}
+            onRoomTypeChange={chooseRoomType}
             guests={guests}
-            onGuestsChange={setGuests}
+            onGuestsChange={chooseGuests}
           />
           <p className="galaxy-booking__note">Browse room types and details configured for Boms Apartment.</p>
         </section>
@@ -187,7 +191,7 @@ export default function PropertyWebsite() {
             {roomsStatus === "ready" && visibleRooms.length === 0 && (
               <p className="galaxy-room-state">No room types match those guest requirements.</p>
             )}
-            {roomsStatus === "ready" && visibleRooms.map((room) => (
+            {roomsStatus === "ready" && displayedRooms.map((room) => (
               <article className="galaxy-room" key={room.id}>
                 <div className="galaxy-room__image">
                   <img src={room.images?.[0] || defaultRoomImage} alt={`${room.name} room`} loading="lazy" />
@@ -202,12 +206,20 @@ export default function PropertyWebsite() {
                   </div>
                   <div className="galaxy-room__footer">
                     <p>{room.rateKobo > 0 ? <><strong>{naira.format(room.rateKobo / 100)}</strong><span> / night</span></> : <strong>Rate on request</strong>}</p>
-                    <a href="#book" onClick={() => setRoomTypeId(room.id)}>Select room <ArrowUpRight size={15} /></a>
+                    <a href="#book" onClick={() => chooseRoomType(room.id)}>Select room <ArrowUpRight size={15} /></a>
                   </div>
                 </div>
               </article>
             ))}
           </div>
+          {roomsStatus === "ready" && visibleRooms.length > 6 && (
+            <div className="galaxy-room-more-wrap">
+              <button className="galaxy-room-more" type="button" onClick={() => setShowAllRooms((shown) => !shown)}>
+                {showAllRooms ? "Show fewer rooms" : "View more rooms"}
+                {!showAllRooms && <ArrowDown size={15} aria-hidden="true" />}
+              </button>
+            </div>
+          )}
         </section>
 
         <section className="galaxy-experiences" id="experiences">

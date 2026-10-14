@@ -82,6 +82,9 @@
 .galaxy-room__footer a { display: inline-flex; align-items: center; gap: 5px; color: #1d5278; font-size: 10px; font-weight: 700; white-space: nowrap; }
 .galaxy-room__footer a:hover { color: #98753a; }
 .galaxy-room-state { grid-column: 1 / -1; margin: 0; border: 1px solid #dce6ee; background: #f3f7fa; color: #526d82; padding: 24px; text-align: center; }
+.galaxy-room-more-wrap { display: flex; justify-content: center; margin: 34px auto 0; }
+.galaxy-room-more { display: inline-flex; align-items: center; gap: 9px; min-height: 44px; border: 1px solid var(--galaxy-green); background: transparent; color: var(--galaxy-green); cursor: pointer; padding: 0 22px; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; transition: background .2s ease, color .2s ease; }
+.galaxy-room-more:hover { background: var(--galaxy-green); color: white; }
 .galaxy-experiences { display: grid; grid-template-columns: .82fr 1.18fr; gap: 7vw; align-items: center; padding: 88px clamp(22px, 7vw, 108px); background: var(--galaxy-green-deep); color: white; }
 .galaxy-experiences__intro { max-width: 460px; }
 .galaxy-experiences h2 { color: white; }
