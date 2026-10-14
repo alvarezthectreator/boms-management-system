@@ -4574,10 +4574,10 @@ function App() {
   async function saveRoom(room, values) {
     if (!allowed(role, "inspect")) return { error: "Only a manager or admin can edit room details." };
     try {
-      const response = await fetch(room ? `/api/rooms/${encodeURIComponent(room.id)}` : "/api/rooms", {
-        method: room ? "PATCH" : "POST",
+      const response = await fetch("/api/rooms", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(values),
+        body: JSON.stringify(room ? { ...values, action: "update", roomId: room.id } : values),
       });
       const responseBody = await response.text();
       let result = {};

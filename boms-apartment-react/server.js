@@ -189,6 +189,29 @@ async function getRoom(id, connection = database) {
   `, [id, propertyId]);
 }
 
+async function updateRoomDetails(request, id) {
+  const room = await getRoom(id);
+  if (!room) throw Object.assign(new Error("Room not found."), { status: 404 });
+  const before = (await listRooms()).find((item) => item.id === room.id);
+  const values = cleanRoomValues(request.body);
+  const image = parseImage(request.body);
+  const floor = request.body.floor === "" || request.body.floor == null ? null : Number(request.body.floor);
+  if (floor !== null && (!Number.isInteger(floor) || floor < 0)) throw Object.assign(new Error("Enter a valid floor."), { status: 400 });
+  await database.withTransaction(async (transaction) => {
+    await transaction.run(`
+      UPDATE room_types SET name = ?, size_m2 = ?, bed_type = ?, max_guests = ?, description = ?, base_rate_kobo = ?, updated_at = CURRENT_TIMESTAMP
+      ${image ? ", photos_json = ?" : ""}
+      WHERE id = ? AND property_id = ?
+    `, [...[values.name, values.sizeM2, values.bedType, values.maxGuests, values.description, values.rateKobo],
+      ...(image ? [JSON.stringify([image])] : []), room.room_type_id, propertyId]);
+    await transaction.run(`UPDATE units SET name = ?, number = ?, floor = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?`,
+      [values.name, values.number, floor, room.id, propertyId]);
+  });
+  const updated = (await listRooms()).find((item) => item.id === room.id);
+  await writeAudit(request, "room", room.id, "updated", before, updated);
+  return updated;
+}
+
 function parseImage(body) {
   if (body.imageUrl) {
     const imageUrl = String(body.imageUrl).trim();
@@ -245,8 +268,14 @@ app.get("/api/rooms", async (_request, response) => {
 });
 
 app.post("/api/rooms", async (request, response) => {
-  if (request.user.role !== "ceo") return response.status(403).json({ error: "Only an admin can create rooms." });
   try {
+    if (request.body?.action === "update") {
+      if (!['manager', 'ceo'].includes(request.user.role)) {
+        return response.status(403).json({ error: "Only a manager or admin can edit room details." });
+      }
+      return response.json(await updateRoomDetails(request, request.body.roomId));
+    }
+    if (request.user.role !== "ceo") return response.status(403).json({ error: "Only an admin can create rooms." });
     const values = cleanRoomValues(request.body);
     const image = parseImage(request.body);
     const idSuffix = crypto.randomUUID();
@@ -278,26 +307,7 @@ app.patch("/api/rooms/:id", async (request, response) => {
     if (!['manager', 'ceo'].includes(request.user.role)) {
       return response.status(403).json({ error: "Only a manager or admin can edit room details." });
     }
-    const room = await getRoom(request.params.id);
-    if (!room) return response.status(404).json({ error: "Room not found." });
-    const before = (await listRooms()).find((item) => item.id === room.id);
-    const values = cleanRoomValues(request.body);
-    const image = parseImage(request.body);
-    const floor = request.body.floor === "" || request.body.floor == null ? null : Number(request.body.floor);
-    if (floor !== null && (!Number.isInteger(floor) || floor < 0)) return response.status(400).json({ error: "Enter a valid floor." });
-    await database.withTransaction(async (transaction) => {
-      await transaction.run(`
-        UPDATE room_types SET name = ?, size_m2 = ?, bed_type = ?, max_guests = ?, description = ?, base_rate_kobo = ?, updated_at = CURRENT_TIMESTAMP
-        ${image ? ", photos_json = ?" : ""}
-        WHERE id = ? AND property_id = ?
-      `, [...[values.name, values.sizeM2, values.bedType, values.maxGuests, values.description, values.rateKobo],
-        ...(image ? [JSON.stringify([image])] : []), room.room_type_id, propertyId]);
-      await transaction.run(`UPDATE units SET name = ?, number = ?, floor = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?`,
-        [values.name, values.number, floor, room.id, propertyId]);
-    });
-    const updated = (await listRooms()).find((item) => item.id === room.id);
-    await writeAudit(request, "room", room.id, "updated", before, updated);
-    response.json(updated);
+    response.json(await updateRoomDetails(request, request.params.id));
   } catch (error) {
     sendError(response, error);
   }
