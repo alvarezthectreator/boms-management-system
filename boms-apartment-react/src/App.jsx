@@ -1609,14 +1609,15 @@ function Dashboard({
   checkoutFollowUps,
   role,
 }) {
+  const today = lagosClock?.date || TODAY;
   const inventoryUnits = data.units.some((unit) => unit.databaseRoom)
     ? data.units.filter((unit) => unit.databaseRoom)
     : data.units;
   const arrivals = data.bookings.filter(
-    (booking) => booking.checkIn === TODAY && booking.status === "confirmed",
+    (booking) => booking.checkIn === today && booking.status === "confirmed",
   ).length;
   const departures = data.bookings.filter(
-    (booking) => booking.checkOut === TODAY && booking.status === "checked_in",
+    (booking) => booking.checkOut === today && booking.status === "checked_in",
   ).length;
   const occupied = inventoryUnits.filter(
     (unit) => unit.status === "occupied",
@@ -1627,15 +1628,21 @@ function Dashboard({
   const occupancy = availableForOccupancy
     ? Math.round((occupied / availableForOccupancy) * 100)
     : 0;
-  const revenue = data.payments
-    .filter(
-      (payment) =>
-        ["paid", "refunded"].includes(payment.status) && payment.paidAt?.startsWith("2026-10"),
-    )
-    .reduce((sum, payment) => sum + payment.amountKobo, 0);
-  const recent = [...data.bookings]
-    .sort((a, b) => b.id.localeCompare(a.id))
-    .slice(0, 6);
+  const revenueDays = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(`${today}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() - (6 - index));
+    const dateKey = date.toISOString().slice(0, 10);
+    return {
+      date: dateKey,
+      label: new Intl.DateTimeFormat("en-NG", { weekday: "short", timeZone: "UTC" }).format(date),
+      amountKobo: data.payments
+        .filter((payment) => payment.databasePayment && payment.status === "paid" && payment.paidAt === dateKey)
+        .reduce((sum, payment) => sum + Number(payment.amountKobo || 0), 0),
+    };
+  });
+  const revenue = revenueDays.reduce((sum, day) => sum + day.amountKobo, 0);
+  const maxDailyRevenue = Math.max(1, ...revenueDays.map((day) => day.amountKobo));
+  const recent = data.bookings.slice(0, 6);
   const lowStockItems = data.inventory.filter((item) => item.databaseItem && item.quantity <= item.minimum);
   const deskSummary = buildDeskWorkerDashboardSummary({
     bookings: data.bookings,
@@ -1643,15 +1650,14 @@ function Dashboard({
     units: inventoryUnits,
     inventory: data.inventory,
     settings: data.settings,
-  }, TODAY, (typeof lagosClock !== "undefined" ? lagosClock.time : "12:00"));
+  }, today, (typeof lagosClock !== "undefined" ? lagosClock.time : "12:00"));
   const roomInventory = databaseRooms || [];
-  const defaultRoomCheckout = defaultCheckoutDate(TODAY);
   const bookableRooms = roomInventory.filter((room) => {
     const unit = data.units.find((item) => item.id === room.id);
-    return ["available", "inspected"].includes(room.status) && room.rateKobo > 0 && unit &&
-      isUnitAvailable(unit, TODAY, defaultRoomCheckout, data.bookings, data.blocks || []);
+    return ["available", "inspected"].includes(room.status) && unit;
   });
-  const barValues = [42, 67, 52, 84, 58, 91, 73];
+  const currentHour = Number(String(lagosClock?.time || "12:00").slice(0, 2));
+  const greeting = currentHour < 12 ? "Good morning" : currentHour < 17 ? "Good afternoon" : "Good evening";
   const activeFnbOrders = (fnbData.orders || [])
     .filter((order) => ["new", "accepted", "preparing", "ready"].includes(order.status))
     .slice(0, 4);
@@ -1681,7 +1687,7 @@ function Dashboard({
   const managementHeader = (
     <PageHeader
       eyebrow="Operations overview · Lagos"
-      title={`Good morning, ${userName.split(" ")[0]}`}
+      title={`${greeting}, ${userName.split(" ")[0]}`}
       description="Focus on guest bookings, arrivals, departures, housekeeping prep, and room readiness."
       action={
         <div className="flex gap-2">
@@ -1789,17 +1795,17 @@ function Dashboard({
           <div><h2 className="font-semibold text-[#25332b]">Book a room</h2><p className="mt-1 text-xs text-[#7a8880]">Rooms ready for a new reservation</p></div>
           <Button onClick={() => onCreate("booking")}><Plus size={16} />New booking</Button>
         </div>
-        {bookableRooms.length ? <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-4">
+        {roomsLoading ? <p className="px-5 py-4 text-sm text-[#718078]">Loading room availability…</p> : roomsError ? <p role="alert" className="px-5 py-4 text-sm text-rose-700">Room availability could not be loaded: {roomsError}</p> : bookableRooms.length ? <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-4">
           {bookableRooms.slice(0, 4).map((room) => (
             <article key={room.id} className="overflow-hidden rounded-lg border border-[#e3eae5] bg-white">
               {room.images?.[0] ? <img src={room.images[0]} alt={`${room.roomTypeName} room ${room.number}`} className="aspect-[16/9] w-full object-cover" /> : <div className="grid aspect-[16/9] place-items-center bg-[#edf3ee] text-[#789082]"><BedDouble size={34} strokeWidth={1.4} /></div>}
               <div className="flex items-center justify-between gap-3 p-3">
                 <div className="min-w-0"><p className="truncate text-sm font-semibold">Room {room.number}</p><p className="truncate text-xs text-[#718078]">{room.roomTypeName} · {room.rateKobo > 0 ? `${formatMoney(room.rateKobo)}/night` : "Rate not set"}</p></div>
-                <Button variant="secondary" className="min-h-9 shrink-0 px-2.5 text-xs" disabled={!(room.rateKobo > 0)} onClick={() => onCreate("booking", { unitId: room.id, roomTypeId: room.roomTypeId, checkIn: TODAY })}>{room.rateKobo > 0 ? "Book" : "Rate needed"}</Button>
+                <Button variant="secondary" className="min-h-9 shrink-0 px-2.5 text-xs" disabled={!(room.rateKobo > 0)} onClick={() => onCreate("booking", { unitId: room.id, roomTypeId: room.roomTypeId, checkIn: today })}>{room.rateKobo > 0 ? "Book" : "Rate needed"}</Button>
               </div>
             </article>
           ))}
-        </div> : <div className="px-5 py-4 text-sm text-[#718078]">No rooms are ready to reserve right now. Check room status or create a booking to see the full availability calendar.</div>}
+        </div> : <div className="px-5 py-4 text-sm text-[#718078]">There are no rooms marked available or inspected in the room database.</div>}
       </Panel>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -1939,13 +1945,13 @@ function Dashboard({
               <h2 className="font-semibold text-[#25332b]">Revenue overview</h2>
               <p className="mt-1 text-xs text-[#7a8880]">Payments received · last 7 days</p>
             </div>
-            <button className="inline-flex items-center gap-2 rounded-lg border border-[#e4eae6] px-3 py-2 text-xs text-[#647269]">This week <ChevronDown size={14} /></button>
+            <span className="text-xs text-[#647269]">Last 7 days</span>
           </div>
           <div className="flex h-48 items-end gap-3 border-b border-[#e5ebe7] px-1 sm:gap-5">
-            {barValues.map((height, index) => (
-              <div key={index} className="flex h-full flex-1 flex-col items-center justify-end gap-2">
-                <div className="w-full max-w-10 rounded-t-md bg-[#d8eee2] transition hover:bg-[#82bda2]" style={{ height: `${height}%` }} title={`Day ${index + 1}`} />
-                <span className="pb-2 text-[11px] text-[#7c8981]">{["Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Mon"][index]}</span>
+            {revenueDays.map((day) => (
+              <div key={day.date} className="flex h-full flex-1 flex-col items-center justify-end gap-2">
+                <div className="w-full max-w-10 rounded-t-md bg-[#d8eee2] transition hover:bg-[#82bda2]" style={{ height: `${day.amountKobo ? Math.max(4, (day.amountKobo / maxDailyRevenue) * 100) : 0}%` }} title={`${day.date}: ${formatMoney(day.amountKobo)}`} />
+                <span className="pb-2 text-[11px] text-[#7c8981]">{day.label}</span>
               </div>
             ))}
           </div>
@@ -1996,8 +2002,8 @@ function Dashboard({
             </div>
             <span className="grid size-9 place-items-center rounded-lg bg-[#edf6f0] text-[#176b54]"><Users size={18} /></span>
           </div>
-          {data.bookings.filter((booking) => booking.checkIn === TODAY && booking.status === "confirmed").length ? (
-            data.bookings.filter((booking) => booking.checkIn === TODAY && booking.status === "confirmed").map((booking) => (
+          {data.bookings.filter((booking) => booking.checkIn === today && booking.status === "confirmed").length ? (
+            data.bookings.filter((booking) => booking.checkIn === today && booking.status === "confirmed").map((booking) => (
               <div key={booking.id} className="flex items-center gap-3 border-t border-[#edf1ee] py-3">
                 <span className="grid size-9 place-items-center rounded-full bg-[#e8f3ec] text-xs font-semibold text-[#23694f]">{initials(guestFor(data, booking.guestId)?.name)}</span>
                 <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-[#344239]">{guestFor(data, booking.guestId)?.name}</p><p className="text-xs text-[#7b8981]">Unit {unitFor(data, booking.unitId)?.number} · {booking.adults} adults</p></div>
@@ -4449,6 +4455,67 @@ function App() {
     void loadDatabaseData();
     return () => {
       cancelled = true;
+    };
+  }, [signedIn]);
+
+  useEffect(() => {
+    if (!signedIn) return undefined;
+    let cancelled = false;
+    async function refreshDashboardData() {
+      try {
+        const responses = await Promise.all([
+          fetch("/api/rooms"),
+          fetch("/api/reservations"),
+          fetch("/api/blocks"),
+          fetch("/api/operations"),
+          fetch("/api/guests"),
+        ]);
+        if (responses.some((response) => !response.ok)) return;
+        const [rooms, reservations, blocks, operations, guests] = await Promise.all(responses.map((response) => response.json()));
+        if (cancelled) return;
+        const units = rooms.map((room) => ({
+          id: room.id,
+          name: room.name,
+          number: room.number,
+          roomTypeId: room.roomTypeId,
+          floor: room.floor || "—",
+          status: room.status,
+          rateKobo: room.rateKobo || 0,
+          maxGuests: room.maxGuests,
+          databaseRoom: true,
+        }));
+        const databaseGuests = [
+          ...guests.map((guest) => ({ ...guest, databaseGuest: true })),
+          ...reservations.filter((booking) => booking.guest).map((booking) => ({ ...booking.guest, databaseGuest: true })),
+        ];
+        setDatabaseRooms(rooms.map((room) => ({ ...room, databaseRoom: true })));
+        setRoomsError("");
+        setData((current) => ({
+          ...current,
+          bookings: reservations.map((booking) => ({ ...booking, databaseBooking: true })),
+          guests: mergeById(current.guests.filter((guest) => !guest.databaseGuest), databaseGuests),
+          blocks: [...current.blocks.filter((block) => !block.databaseBlock), ...blocks.map((block) => ({ ...block, databaseBlock: true }))],
+          payments: [...current.payments.filter((payment) => !payment.databasePayment), ...operations.payments],
+          invoices: [...current.invoices.filter((invoice) => !invoice.databaseInvoice), ...operations.invoices],
+          inventory: [...current.inventory.filter((item) => !item.databaseItem), ...operations.inventory],
+          stockMovements: [...current.stockMovements.filter((movement) => !movement.databaseMovement), ...operations.stockMovements],
+          expenses: [...current.expenses.filter((expense) => !expense.databaseExpense), ...operations.expenses],
+          tasks: [...current.tasks.filter((task) => !task.databaseTask), ...operations.tasks],
+          suppliers: [...current.suppliers.filter((supplier) => !supplier.databaseSupplier), ...operations.suppliers],
+          purchaseOrders: [...current.purchaseOrders.filter((order) => !order.databasePurchaseOrder), ...operations.purchaseOrders],
+          units: [...current.units.filter((unit) => !unit.databaseRoom), ...units],
+        }));
+      } catch {
+        // Retain the last successful database snapshot during brief network failures.
+      }
+    }
+    const refreshOnFocus = () => { void refreshDashboardData(); };
+    const timer = window.setInterval(refreshOnFocus, 30000);
+    window.addEventListener("focus", refreshOnFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshOnFocus);
     };
   }, [signedIn]);
 
