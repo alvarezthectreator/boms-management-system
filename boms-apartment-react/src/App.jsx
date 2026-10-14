@@ -805,18 +805,38 @@ function RoomEditorDialog({ room, onClose, onSave }) {
   async function chooseImage(event) {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith("image/") || file.size > 5 * 1024 * 1024) {
-      setError("Choose an image no larger than 5 MB.");
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 15 * 1024 * 1024) {
+      setError("Choose a JPG, PNG, or WebP image no larger than 15 MB.");
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      setImageDataUrl(String(reader.result || ""));
-      setImageUrl("");
-      setError("");
-    };
-    reader.onerror = () => setError("The selected image could not be read.");
-    reader.readAsDataURL(file);
+    try {
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, 1800 / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(bitmap.width * scale);
+      canvas.height = Math.round(bitmap.height * scale);
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+      let compressed = null;
+      for (const quality of [0.84, 0.74, 0.64, 0.54]) {
+        compressed = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", quality));
+        if (compressed && compressed.size <= 2.8 * 1024 * 1024) break;
+      }
+      if (!compressed || compressed.size > 2.8 * 1024 * 1024) {
+        setError("This image could not be compressed enough. Choose a smaller photo.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        setImageDataUrl(String(reader.result || ""));
+        setImageUrl("");
+        setError("");
+      };
+      reader.onerror = () => setError("The selected image could not be read.");
+      reader.readAsDataURL(compressed);
+    } catch {
+      setError("The selected image could not be processed. Try a JPG, PNG, or WebP photo.");
+    }
   }
 
   async function submit(event) {
@@ -868,7 +888,7 @@ function RoomEditorDialog({ room, onClose, onSave }) {
         </div>
         <label className="block text-sm font-medium text-[#34443a]">
           Upload a room photo
-          <span className="mt-1 block text-xs font-normal text-[#718078]">Optional. JPG, PNG, or WebP, up to 5 MB.</span>
+          <span className="mt-1 block text-xs font-normal text-[#718078]">Optional. JPG, PNG, or WebP, up to 15 MB. Photos are compressed before upload.</span>
           <input
             type="file"
             accept="image/jpeg,image/png,image/webp"
@@ -4559,8 +4579,19 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(values),
       });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) return { error: result.error || "Room details could not be saved." };
+      const responseBody = await response.text();
+      let result = {};
+      try {
+        result = responseBody ? JSON.parse(responseBody) : {};
+      } catch {
+        result = {};
+      }
+      if (!response.ok) {
+        const message = response.status === 413
+          ? "The room photo is too large to upload. Choose a smaller photo and try again."
+          : result.error || `Room details could not be saved (HTTP ${response.status}).`;
+        return { error: message };
+      }
       const savedRoom = { ...result, databaseRoom: true };
       setDatabaseRooms((current) => room
         ? current.map((item) => item.id === result.id ? savedRoom : item)
