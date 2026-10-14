@@ -1441,9 +1441,9 @@ function DashboardOrderComposer({ data, rooms, fnbData, loading, canAddMenu, onA
           {rooms.map((room) => {
             const image = room.images?.[0];
             const isSelected = selectedRoomId === room.id;
-            return <button key={room.id} type="button" aria-pressed={isSelected} aria-label={`Room ${room.number}, ${room.roomTypeName || "Room"}, ${room.status.replaceAll("_", " ")}`} onClick={() => setSelectedRoomId(room.id)} className={`w-36 shrink-0 snap-start overflow-hidden rounded-lg border text-left transition ${isSelected ? "border-[#16836b] ring-2 ring-[#16836b]/20" : "border-[#dfe7e1] hover:border-[#9eafa4]"}`}>
+            return <button key={room.id} type="button" aria-pressed={isSelected} aria-label={`${room.name || `Room ${room.number}`}, ${room.roomTypeName || "Room"}, ${room.status.replaceAll("_", " ")}`} onClick={() => setSelectedRoomId(room.id)} className={`w-36 shrink-0 snap-start overflow-hidden rounded-lg border text-left transition ${isSelected ? "border-[#16836b] ring-2 ring-[#16836b]/20" : "border-[#dfe7e1] hover:border-[#9eafa4]"}`}>
               {image ? <img src={image} alt={`Room ${room.number}`} loading="lazy" className="aspect-square w-full object-cover" /> : <span className="grid aspect-square place-items-center bg-[#edf3ee] text-[#688273]"><BedDouble size={28} /></span>}
-              <span className="block p-2.5"><span className="block truncate text-sm font-semibold text-[#2c3b34]">Room {room.number}</span><span className="mt-0.5 block truncate text-xs text-[#77857d]">{room.roomTypeName || "Room"} · {room.status.replaceAll("_", " ")}</span></span>
+              <span className="block p-2.5"><span className="block truncate text-sm font-semibold text-[#2c3b34]">{room.name || `Room ${room.number}`}</span><span className="mt-0.5 block truncate text-xs text-[#77857d]">{room.roomTypeName || "Room"} · {room.status.replaceAll("_", " ")}</span></span>
             </button>;
           })}
         </div>
@@ -4225,6 +4225,27 @@ function App() {
     };
     const timer = window.setInterval(() => { void refreshStockAlerts(); }, 30000);
     return () => window.clearInterval(timer);
+  }, [signedIn]);
+
+  useEffect(() => {
+    if (!signedIn) return undefined;
+    let cancelled = false;
+    fetch("/api/rooms")
+      .then(async (response) => {
+        if (!response.ok) throw new Error("The room database could not be loaded.");
+        const rooms = await response.json();
+        if (!Array.isArray(rooms)) throw new Error("The room database returned invalid data.");
+        return rooms;
+      })
+      .then((rooms) => {
+        if (cancelled || !rooms.length) return;
+        setDatabaseRooms(rooms.map((room) => ({ ...room, databaseRoom: true })));
+        setRoomsError("");
+      })
+      .catch((error) => {
+        if (!cancelled) setRoomsError(error.message || "The room database is unavailable.");
+      });
+    return () => { cancelled = true; };
   }, [signedIn]);
 
   useEffect(() => {
