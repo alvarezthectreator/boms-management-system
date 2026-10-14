@@ -634,8 +634,9 @@ async function validateReservation(input, existingId = null, connection = databa
   if (!Number.isInteger(nights) || nights < 1) throw Object.assign(new Error("Choose valid check-in and check-out dates."), { status: 400 });
   const adults = Number(input.adults);
   const children = Number(input.children || 0);
-  if (!Number.isInteger(adults) || adults < 1 || !Number.isInteger(children) || children < 0 || adults + children > Math.min(3, room.max_guests || 3)) {
-    throw Object.assign(new Error("Each room accommodates a maximum of 3 guests."), { status: 400 });
+  const maxGuests = Number(room.max_guests || 3);
+  if (!Number.isInteger(adults) || adults < 1 || !Number.isInteger(children) || children < 0 || adults + children > maxGuests) {
+    throw Object.assign(new Error(`This room accommodates a maximum of ${maxGuests} guests.`), { status: 400 });
   }
   if (!room.base_rate_kobo) throw Object.assign(new Error("Set this room's nightly rate before booking."), { status: 409 });
   const conflict = await findBookingConflictAsync(connection, input.unitId, checkIn, checkOut, existingId);
@@ -728,6 +729,75 @@ async function saveReservation(input, request, existingId = null) {
     return reservationId;
   });
 }
+
+app.post("/api/public/reservations", async (request, response) => {
+  try {
+    const roomTypeId = String(request.body.roomTypeId || "").trim();
+    const name = String(request.body.name || "").trim();
+    const phone = String(request.body.phone || "").trim();
+    const email = String(request.body.email || "").trim();
+    const checkIn = String(request.body.checkIn || "");
+    const checkOut = String(request.body.checkOut || "");
+    const adults = Number(request.body.adults || 1);
+    const children = Number(request.body.children || 0);
+    if (!roomTypeId) return response.status(400).json({ error: "Choose a room type." });
+    if (!name || !phone) return response.status(400).json({ error: "Enter your name and phone number." });
+    const today = new Intl.DateTimeFormat("sv-SE", { timeZone: "Africa/Lagos" }).format(new Date());
+    if (checkIn < today) return response.status(400).json({ error: "Choose today or a future check-in date." });
+    if (!Number.isInteger(adults) || adults < 1 || !Number.isInteger(children) || children < 0) {
+      return response.status(400).json({ error: "Enter a valid number of adults and children." });
+    }
+
+    const candidates = await database.all(`
+      SELECT units.id, room_types.max_guests
+      FROM units
+      JOIN room_types ON room_types.id = units.room_type_id AND room_types.property_id = units.property_id
+      WHERE units.property_id = ? AND room_types.id = ?
+        AND units.deleted_at IS NULL AND room_types.deleted_at IS NULL
+        AND units.status <> 'out_of_order'
+      ORDER BY CASE WHEN units.status = 'available' THEN 0 WHEN units.status = 'inspected' THEN 1 ELSE 2 END, units.number
+    `, [propertyId, roomTypeId]);
+    const eligibleUnits = candidates.filter((unit) => adults + children <= Number(unit.max_guests || 3));
+    if (!eligibleUnits.length) {
+      return response.status(candidates.length ? 400 : 404).json({
+        error: candidates.length ? "This room type does not have capacity for this group." : "This room type is no longer available.",
+      });
+    }
+
+    const existingGuest = await database.get(
+      "SELECT id FROM guests WHERE property_id = ? AND phone = ? AND deleted_at IS NULL ORDER BY created_at LIMIT 1",
+      [propertyId, phone],
+    );
+    const input = {
+      ...request.body,
+      guestId: existingGuest?.id,
+      guest: { name, phone, email },
+      checkIn,
+      checkOut,
+      adults,
+      children,
+      status: "confirmed",
+      source: "Website",
+      requests: String(request.body.requests || "").trim(),
+      discountKobo: 0,
+      servicePercent: 0,
+      vatPercent: 0,
+    };
+    let lastAvailabilityError = null;
+    for (const unit of eligibleUnits) {
+      try {
+        const id = await saveReservation({ ...input, unitId: unit.id }, request);
+        return response.status(201).json({ id, status: "confirmed" });
+      } catch (error) {
+        if (error.status !== 409) throw error;
+        lastAvailabilityError = error;
+      }
+    }
+    throw Object.assign(new Error(lastAvailabilityError?.message || "No rooms of this type are available for those dates."), { status: 409 });
+  } catch (error) {
+    sendError(response, error);
+  }
+});
 
 app.post("/api/reservations", async (request, response) => {
   try {

@@ -169,6 +169,7 @@ function readDemoData() {
     return {
       ...defaults,
       ...stored,
+      bookings: (stored.bookings || defaults.bookings).filter((booking) => booking.databaseBooking),
       users,
       settings: {
         ...defaults.settings,
@@ -4410,15 +4411,11 @@ function App() {
         setRestockRequests(loadedRestockRequests);
         setRoomsError("");
         setData((current) => {
-          const bookingsById = new Map(current.bookings.map((booking) => [booking.id, booking]));
-          for (const booking of reservations) {
-            bookingsById.set(booking.id, { ...booking, databaseBooking: true });
-          }
           const databaseBookingIds = new Set(reservations.map((booking) => booking.id));
           return {
             ...current,
             guests: mergeById(current.guests, allDatabaseGuests),
-            bookings: [...bookingsById.values()],
+            bookings: reservations.map((booking) => ({ ...booking, databaseBooking: true })),
             blocks: [...current.blocks.filter((block) => !block.databaseBlock), ...blocks],
             payments: mergeById(current.payments, operations.payments),
             invoices: mergeById(current.invoices.filter((invoice) => !databaseBookingIds.has(invoice.bookingId)), operations.invoices),

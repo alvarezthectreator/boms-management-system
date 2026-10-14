@@ -17,6 +17,10 @@ import "./PropertyWebsite.css";
 
 const currentYear = new Date().getFullYear();
 const defaultRoomImage = "/galaxy/defaultroom.png";
+const siteToday = new Intl.DateTimeFormat("sv-SE", { timeZone: "Africa/Lagos" }).format(new Date());
+const nextDay = new Date(`${siteToday}T00:00:00Z`);
+nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+const siteTomorrow = nextDay.toISOString().slice(0, 10);
 const fallbackRooms = [
   {
     id: "studio",
@@ -94,9 +98,42 @@ export default function PropertyWebsite() {
   const [guests, setGuests] = useState(2);
   const [showAllRooms, setShowAllRooms] = useState(false);
   const [roomsStatus, setRoomsStatus] = useState("loading");
+  const [bookingRoomId, setBookingRoomId] = useState("");
+  const [bookingSaving, setBookingSaving] = useState(false);
+  const [bookingMessage, setBookingMessage] = useState(null);
   const closeMenu = () => setMenuOpen(false);
   const chooseRoomType = (id) => { setRoomTypeId(id); setShowAllRooms(false); };
   const chooseGuests = (count) => { setGuests(count); setShowAllRooms(false); };
+  const startBooking = (room) => {
+    chooseRoomType(room.id);
+    setBookingRoomId(room.id);
+    setBookingMessage(null);
+  };
+
+  async function submitWebsiteBooking(event) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const payload = Object.fromEntries(formData.entries());
+    setBookingSaving(true);
+    setBookingMessage(null);
+    try {
+      const response = await fetch("/api/public/reservations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, roomTypeId: bookingRoomId }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Your booking could not be submitted.");
+      setBookingMessage({
+        success: true,
+        text: `Your booking is confirmed. Your reference is ${result.id}.`,
+      });
+    } catch (error) {
+      setBookingMessage({ success: false, text: error.message || "The booking service is unavailable. Please try again." });
+    } finally {
+      setBookingSaving(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -175,6 +212,30 @@ export default function PropertyWebsite() {
             onGuestsChange={chooseGuests}
           />
           <p className="galaxy-booking__note">Browse room types and details configured for Boms Apartment.</p>
+          {bookingRoomId && (() => {
+            const selectedRoom = rooms.find((room) => room.id === bookingRoomId);
+            if (!selectedRoom) return null;
+            return (
+              <form className="galaxy-public-booking" onSubmit={submitWebsiteBooking}>
+                <div className="galaxy-public-booking__heading">
+                  <div><p className="galaxy-eyebrow galaxy-eyebrow--dark">Book directly</p><h3>{selectedRoom.name}</h3></div>
+                  <button type="button" className="galaxy-public-booking__close" onClick={() => { setBookingRoomId(""); setBookingMessage(null); }}>Change room</button>
+                </div>
+                <div className="galaxy-public-booking__grid">
+                  <label className="galaxy-search__field"><span>Check-in</span><input name="checkIn" type="date" min={siteToday} defaultValue={siteToday} required /></label>
+                  <label className="galaxy-search__field"><span>Check-out</span><input name="checkOut" type="date" min={siteTomorrow} defaultValue={siteTomorrow} required /></label>
+                  <label className="galaxy-search__field"><span>Adults</span><input name="adults" type="number" min="1" max={selectedRoom.maxGuests} defaultValue="1" required /></label>
+                  <label className="galaxy-search__field"><span>Children</span><input name="children" type="number" min="0" max={selectedRoom.maxGuests} defaultValue="0" /></label>
+                  <label className="galaxy-search__field"><span>Full name</span><input name="name" autoComplete="name" maxLength="120" required /></label>
+                  <label className="galaxy-search__field"><span>Phone number</span><input name="phone" type="tel" autoComplete="tel" maxLength="40" required /></label>
+                  <label className="galaxy-search__field"><span>Email (optional)</span><input name="email" type="email" autoComplete="email" maxLength="160" /></label>
+                  <label className="galaxy-search__field galaxy-public-booking__requests"><span>Requests (optional)</span><textarea name="requests" maxLength="1000" rows="2" placeholder="Anything we should know about your stay?" /></label>
+                </div>
+                {bookingMessage && <p className={`galaxy-public-booking__message${bookingMessage.success ? " is-success" : " is-error"}`} role={bookingMessage.success ? "status" : "alert"}>{bookingMessage.text}</p>}
+                <div className="galaxy-public-booking__actions"><p>Submitting confirms your room reservation. Payment is arranged with the property.</p><button className="galaxy-search__submit" type="submit" disabled={bookingSaving}>{bookingSaving ? "Submitting…" : "Confirm booking"}<ArrowUpRight size={15} /></button></div>
+              </form>
+            );
+          })()}
         </section>
 
         <section className="galaxy-destinations" id="destinations">
@@ -206,7 +267,7 @@ export default function PropertyWebsite() {
                   </div>
                   <div className="galaxy-room__footer">
                     <p>{room.rateKobo > 0 ? <><strong>{naira.format(room.rateKobo / 100)}</strong><span> / night</span></> : <strong>Rate on request</strong>}</p>
-                    <a href="#book" onClick={() => chooseRoomType(room.id)}>Select room <ArrowUpRight size={15} /></a>
+                    <a href="#book" onClick={() => startBooking(room)}>Book this room <ArrowUpRight size={15} /></a>
                   </div>
                 </div>
               </article>
