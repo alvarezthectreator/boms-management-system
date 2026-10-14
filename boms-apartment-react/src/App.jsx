@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Component, useEffect, useRef, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -280,6 +280,25 @@ function Panel({ children, className = "" }) {
       {children}
     </section>
   );
+}
+
+class RoomsPageBoundary extends Component {
+  state = { error: null };
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("Rooms page failed to render.", error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.error) {
+      return <Panel className="p-6"><h1 className="text-lg font-semibold">Rooms could not be displayed</h1><p className="mt-2 text-sm text-rose-700">{this.state.error.message || "Unexpected room data."}</p><Button variant="secondary" className="mt-4" onClick={() => window.location.reload()}>Reload rooms</Button></Panel>;
+    }
+    return this.props.children;
+  }
 }
 
 function PageHeader({ eyebrow, title, description, action }) {
@@ -2275,13 +2294,15 @@ function RoomsPage({
   loading,
   error,
 }) {
-  const rows = rooms.filter((room) =>
-    `${room.name} ${room.number} ${room.roomTypeName} ${room.status}`
+  const roomList = Array.isArray(rooms) ? rooms : [];
+  const query = String(search || "").toLowerCase();
+  const rows = roomList.filter((room) =>
+    `${room.name || ""} ${room.number || ""} ${room.roomTypeName || ""} ${room.status || ""}`
       .toLowerCase()
-      .includes(search.toLowerCase()),
+      .includes(query),
   );
   const counts = ["available", "occupied", "dirty", "out_of_order"].map(
-    (status) => [status, rooms.filter((room) => room.status === status).length],
+    (status) => [status, roomList.filter((room) => room.status === status).length],
   );
   return (
     <>
@@ -6157,20 +6178,22 @@ function App() {
       break;
     case "rooms":
       content = (
-        <RoomsPage
-          rooms={databaseRooms}
-          search={search}
-          onSearch={setSearch}
-          role={role}
-          onCreate={requestCreate}
-          onCreateRoom={() => setModal({ type: "roomEditor", record: null })}
-          onEditRoom={(room) => setModal({ type: "roomEditor", record: room })}
-          onDeleteRoom={deleteRoom}
-          onBlock={openBlock}
-          onUnitStatus={updateDatabaseRoomStatus}
-          loading={roomsLoading}
-          error={roomsError}
-        />
+        <RoomsPageBoundary key="rooms">
+          <RoomsPage
+            rooms={databaseRooms}
+            search={search}
+            onSearch={setSearch}
+            role={role}
+            onCreate={requestCreate}
+            onCreateRoom={() => setModal({ type: "roomEditor", record: null })}
+            onEditRoom={(room) => setModal({ type: "roomEditor", record: room })}
+            onDeleteRoom={deleteRoom}
+            onBlock={openBlock}
+            onUnitStatus={updateDatabaseRoomStatus}
+            loading={roomsLoading}
+            error={roomsError}
+          />
+        </RoomsPageBoundary>
       );
       break;
     case "calendar":
