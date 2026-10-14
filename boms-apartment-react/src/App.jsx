@@ -4205,6 +4205,15 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     const savedSession = localStorage.getItem("boms-demo-session");
+    const clearSavedSession = () => {
+      localStorage.removeItem("boms-demo-session");
+      if (!cancelled) {
+        setCurrentUserId("");
+        setRole("worker");
+        setSignedIn(false);
+      }
+      if (window.location.pathname !== "/") window.history.replaceState({}, "", "/login");
+    };
     if (savedSession) {
       try {
         const session = JSON.parse(savedSession);
@@ -4224,9 +4233,11 @@ function App() {
           setCurrentUserId(result.user.id);
           setRole(result.user.role);
           setSignedIn(true);
+        } else if (!cancelled && savedSession) {
+          clearSavedSession();
         }
       })
-      .catch(() => {})
+      .catch(() => { if (!cancelled && savedSession) clearSavedSession(); })
       .finally(() => { if (!cancelled) setAuthLoading(false); });
     return () => { cancelled = true; };
   }, []);
@@ -4261,7 +4272,14 @@ function App() {
     let cancelled = false;
     fetch("/api/rooms")
       .then(async (response) => {
-        if (!response.ok) throw new Error("The room database could not be loaded.");
+        if (!response.ok) {
+          const result = await response.json().catch(() => ({}));
+          const error = new Error(response.status === 401
+            ? "Your sign-in has expired. Please sign in again."
+            : result.error || `The room database request failed (HTTP ${response.status}).`);
+          error.status = response.status;
+          throw error;
+        }
         const rooms = await response.json();
         if (!Array.isArray(rooms)) throw new Error("The room database returned invalid data.");
         return rooms;
@@ -4272,7 +4290,15 @@ function App() {
         setRoomsError("");
       })
       .catch((error) => {
-        if (!cancelled) setRoomsError(error.message || "The room database is unavailable.");
+        if (cancelled) return;
+        setRoomsError(error.message || "The room database is unavailable.");
+        if (error.status === 401) {
+          localStorage.removeItem("boms-demo-session");
+          setCurrentUserId("");
+          setRole("worker");
+          setSignedIn(false);
+          window.history.replaceState({}, "", "/login");
+        }
       });
     return () => { cancelled = true; };
   }, [signedIn]);
