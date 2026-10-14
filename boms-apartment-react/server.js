@@ -110,8 +110,8 @@ async function listRooms() {
   const rows = await database.all(`
     SELECT
       units.id,
-      units.name,
-      units.number,
+      room_types.name AS name,
+      room_types.name AS number,
       units.status,
       room_types.id AS room_type_id,
       room_types.name AS room_type_name,
