@@ -107,12 +107,11 @@ async function listRooms() {
   const today = new Intl.DateTimeFormat("sv-SE", {
     timeZone: "Africa/Lagos",
   }).format(new Date());
-  return (await database.all(`
+  const rows = await database.all(`
     SELECT
       units.id,
       units.name,
       units.number,
-      units.floor,
       units.status,
       room_types.id AS room_type_id,
       room_types.name AS room_type_name,
@@ -121,27 +120,40 @@ async function listRooms() {
       room_types.max_guests,
       room_types.description,
       room_types.base_rate_kobo,
-      room_types.photos_json,
-      (
-        SELECT count(*)
-        FROM bookings
-        WHERE bookings.unit_id = units.id
-          AND bookings.status IN ('hold', 'confirmed', 'checked_in')
-          AND bookings.check_in <= ?
-          AND bookings.check_out > ?
-          AND bookings.deleted_at IS NULL
-      ) AS active_reservations
+      room_types.photos_json
     FROM units
     JOIN room_types ON room_types.id = units.room_type_id
     WHERE units.property_id = ?
       AND units.deleted_at IS NULL
       AND room_types.deleted_at IS NULL
     ORDER BY units.name
-  `, [today, today, propertyId])).map((room) => ({
+  `, [propertyId]);
+
+  let activeReservationsByUnit = new Map();
+  try {
+    const reservations = await database.all(`
+      SELECT unit_id, count(*) AS active_reservations
+      FROM bookings
+      WHERE property_id = ?
+        AND status IN ('hold', 'confirmed', 'checked_in')
+        AND check_in <= ?
+        AND check_out > ?
+        AND deleted_at IS NULL
+      GROUP BY unit_id
+    `, [propertyId, today, today]);
+    activeReservationsByUnit = new Map(reservations.map((reservation) => [
+      reservation.unit_id,
+      Number(reservation.active_reservations || 0),
+    ]));
+  } catch (error) {
+    console.error("Room list loaded without active reservation counts.", error);
+  }
+
+  return rows.map((room) => ({
     id: room.id,
     name: room.name,
     number: room.number,
-    floor: room.floor,
+    floor: room.floor || null,
     status: room.status,
     roomTypeId: room.room_type_id,
     roomTypeName: room.room_type_name,
@@ -151,7 +163,7 @@ async function listRooms() {
     description: room.description,
     rateKobo: room.base_rate_kobo,
     images: JSON.parse(room.photos_json || "[]"),
-    activeReservations: room.active_reservations,
+    activeReservations: activeReservationsByUnit.get(room.id) || 0,
   }));
 }
 
