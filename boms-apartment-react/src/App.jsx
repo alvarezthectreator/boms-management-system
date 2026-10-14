@@ -1619,9 +1619,11 @@ function Dashboard({
   const departures = data.bookings.filter(
     (booking) => booking.checkOut === today && booking.status === "checked_in",
   ).length;
-  const occupied = inventoryUnits.filter(
-    (unit) => unit.status === "occupied",
-  ).length;
+  const occupiedUnitIds = new Set(data.bookings
+    .filter((booking) => booking.databaseBooking && booking.status === "checked_in" && booking.checkIn <= today && booking.checkOut > today)
+    .map((booking) => booking.unitId)
+    .filter(Boolean));
+  const occupied = occupiedUnitIds.size;
   const availableForOccupancy = inventoryUnits.filter(
     (unit) => unit.status !== "out_of_order",
   ).length;
