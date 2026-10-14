@@ -2330,7 +2330,6 @@ function RoomsPage({
             <div>
               <p className="text-xs capitalize text-[#77857d]">
                 {status.replaceAll("_", " ")}
-      <LowStockRestockBanner items={lowStockItems} role={role} onNavigate={onNavigate} onRequestRestock={onRequestRestock} />
               </p>
               <p className="mt-1 text-2xl font-semibold text-[#27362e]">
                 {value}
