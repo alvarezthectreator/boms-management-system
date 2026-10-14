@@ -275,8 +275,8 @@ app.post("/api/rooms", async (request, response) => {
 
 app.patch("/api/rooms/:id", async (request, response) => {
   try {
-    if (request.user.role !== "ceo") {
-      return response.status(403).json({ error: "Only an admin can edit room details." });
+    if (!['manager', 'ceo'].includes(request.user.role)) {
+      return response.status(403).json({ error: "Only a manager or admin can edit room details." });
     }
     const room = await getRoom(request.params.id);
     if (!room) return response.status(404).json({ error: "Room not found." });

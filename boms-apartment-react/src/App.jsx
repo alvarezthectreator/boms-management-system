@@ -2362,9 +2362,9 @@ function RoomsPage({
                   />
                 )}
                 <div className="absolute left-3 top-3"><Status value={room.status} /></div>
-                {role === "ceo" && <div className="absolute right-3 top-3 flex gap-2">
+                {role !== "worker" && <div className="absolute right-3 top-3 flex gap-2">
                   <Button variant="secondary" className="min-h-9 bg-white/95 px-3" onClick={() => onEditRoom(room)} title={`Edit ${room.name}`}><ImagePlus size={16} />Edit room</Button>
-                  <Button variant="danger" className="min-h-9 bg-white/95 px-3" onClick={() => onDeleteRoom(room)} title={`Delete ${room.name}`}><X size={16} />Delete</Button>
+                  {role === "ceo" && <Button variant="danger" className="min-h-9 bg-white/95 px-3" onClick={() => onDeleteRoom(room)} title={`Delete ${room.name}`}><X size={16} />Delete</Button>}
                 </div>}
               </div>
               <div className="space-y-4 p-4">
@@ -4552,7 +4552,7 @@ function App() {
     }
   }
   async function saveRoom(room, values) {
-    if (role !== "ceo") return { error: "Only an admin can manage rooms." };
+    if (!allowed(role, "inspect")) return { error: "Only a manager or admin can edit room details." };
     try {
       const response = await fetch(room ? `/api/rooms/${encodeURIComponent(room.id)}` : "/api/rooms", {
         method: room ? "PATCH" : "POST",
