@@ -31,6 +31,9 @@ export function registerPublicWebsiteRoutes(app, database, propertyId) {
       images: ["https://images.unsplash.com/photo-1564501049412-61c2a3083791?auto=format&fit=crop&w=1200&q=80"],
     },
   ];
+  const fallbackRatesByName = new Map(
+    fallbackRooms.map((room) => [room.name, room.rateKobo]),
+  );
 
   app.get("/api/public/rooms", async (_request, response) => {
     const livePromise = (async () => {
@@ -66,7 +69,7 @@ export function registerPublicWebsiteRoutes(app, database, propertyId) {
           bedType: room.bed_type || "",
           maxGuests: Number(room.max_guests || 2),
           description: room.description || "",
-          rateKobo: Number(room.base_rate_kobo || 0),
+          rateKobo: Number(room.base_rate_kobo || fallbackRatesByName.get(room.name) || 0),
           images,
         };
       });
