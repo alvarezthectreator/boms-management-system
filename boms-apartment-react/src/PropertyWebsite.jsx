@@ -215,37 +215,37 @@ export default function PropertyWebsite() {
             <p className="galaxy-eyebrow">Beyond the room</p>
             <h2>Room to relax.<br /><em>Space to celebrate.</em></h2>
             <p>Make the most of your time with signature dining, wellness, and gathering spaces at our Port Harcourt resort.</p>
-            <a className="galaxy-text-link" href="https://galaxylapalm.com/hotels/port-harcourt">Explore Port Harcourt <ArrowRight size={16} /></a>
+            <a className="galaxy-text-link" href="#destinations">Explore our rooms <ArrowRight size={16} /></a>
           </div>
           <div className="galaxy-experiences__photos">
             <figure className="galaxy-experience galaxy-experience--pool">
-              <img src="/galaxy/hotels/port-harcourt/facilities/pool.jpg" alt="Swimming pool at Galaxy La-Palm Port Harcourt" loading="lazy" />
+              <img src="/galaxy/hotels/port-harcourt/Resort%20Pool%20Cafe%20Under%20Canopy.png" alt="Swimming pool and poolside café at Boms Apartment" loading="lazy" />
               <figcaption><Waves size={17} /> Poolside</figcaption>
             </figure>
             <figure className="galaxy-experience galaxy-experience--dining">
-              <img src="/galaxy/hotels/port-harcourt/facilities/restaurant.jpg" alt="Dining at Galaxy La-Palm Port Harcourt" loading="lazy" />
-              <figcaption><Utensils size={17} /> Dining</figcaption>
+              <img src="/galaxy/hotels/port-harcourt/Neon-lit%20modern%20lounge%20and%20bar.png" alt="Neon-lit modern lounge and bar at Boms Apartment" loading="lazy" />
+              <figcaption><Sparkles size={17} /> Lounge</figcaption>
             </figure>
             <figure className="galaxy-experience galaxy-experience--wellness">
-              <img src="/galaxy/hotels/port-harcourt/facilities/gym.jpg" alt="Fitness facilities at Galaxy La-Palm Port Harcourt" loading="lazy" />
-              <figcaption><Dumbbell size={17} /> Wellness</figcaption>
+              <img src="/galaxy/hotels/port-harcourt/Modern%20White%20House%20with%20Pool.png" alt="Modern white house with pool at Boms Apartment" loading="lazy" />
+              <figcaption><Sparkles size={17} /> Bar</figcaption>
             </figure>
           </div>
         </section>
 
         <section className="galaxy-story" id="story">
           <div className="galaxy-story__image">
-            <img src="/galaxy/hotels/port-harcourt/rooms/presidential/01.jpg" alt="A room at Galaxy La-Palm Royal Resort" loading="lazy" />
-            <span>Galaxy La-Palm · Port Harcourt</span>
+            <img src="/galaxy/hotels/port-harcourt/Modern%20Neon-Lit%20Marble%20Bedroom.png" alt="A modern marble bedroom at Boms Apartment" loading="lazy" />
+            <span>Boms Apartment</span>
           </div>
           <div className="galaxy-story__copy">
             <p className="galaxy-eyebrow galaxy-eyebrow--dark">Nigerian, proudly</p>
             <h2>Hospitality,<br /><em>the way it should feel.</em></h2>
-            <p>Galaxy La-Palm is a Nigerian-owned hospitality group with six properties across Rivers, Ebonyi, and the Federal Capital Territory. Since 2011, our promise has been simple: thoughtful stays, genuine warmth, and care in every detail.</p>
-            <a className="galaxy-text-link" href="https://galaxylapalm.com/about">Our story <ArrowRight size={16} /></a>
+            <p>Boms Apartment brings thoughtful hospitality, warm service, and refined comfort to every guest stay, creating a welcoming home away from home in Port Harcourt.</p>
+            <a className="galaxy-text-link" href="#">Our story <ArrowRight size={16} /></a>
             <div className="galaxy-story__hours">
-              <span><Clock3 size={16} /> Port Harcourt check-in</span><strong>2:00 PM</strong>
-              <span><Clock3 size={16} /> Port Harcourt check-out</span><strong>12:00 PM</strong>
+              <span><Clock3 size={16} /> Check-in</span><strong>3:00 AM</strong>
+              <span><Clock3 size={16} /> Check-out</span><strong>12:00 PM</strong>
             </div>
           </div>
         </section>
@@ -257,7 +257,7 @@ export default function PropertyWebsite() {
             <h2>Every stay can take you further.</h2>
             <p>Discover member benefits across stays, dining, and more.</p>
           </div>
-          <a href="https://galaxylapalm.com/loyalty">Discover Galaxy Elite <ArrowUpRight size={16} /></a>
+          <a href="#destinations">Discover Boms Apartment <ArrowUpRight size={16} /></a>
         </section>
       </main>
 
@@ -270,12 +270,12 @@ export default function PropertyWebsite() {
           <div className="galaxy-footer__contact">
             <p className="galaxy-eyebrow galaxy-eyebrow--dark">Reservations</p>
             <a href="tel:+2349169842001"><Phone size={15} /> +234 916 984 2001</a>
-            <a href="mailto:reservations@galaxylapalm.com">reservations@galaxylapalm.com</a>
+            <a href="mailto:reservations@bomsapartment.com">reservations@bomsapartment.com</a>
             <span>#3 Olaka Street, GRA Phase 3<br />Port Harcourt, Rivers State</span>
           </div>
           <div className="galaxy-footer__links">
-            <a href="https://galaxylapalm.com/hotels">All hotels <ArrowUpRight size={14} /></a>
-            <a href="https://galaxylapalm.com/contact">Contact us <ArrowUpRight size={14} /></a>
+            <a href="#destinations">Our rooms <ArrowUpRight size={14} /></a>
+            <a href="#story">About us <ArrowUpRight size={14} /></a>
             <a href="/dashboard">Staff sign in <ArrowUpRight size={14} /></a>
           </div>
         </div>

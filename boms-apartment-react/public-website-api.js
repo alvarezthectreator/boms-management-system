@@ -1,6 +1,39 @@
 export function registerPublicWebsiteRoutes(app, database, propertyId) {
+  const fallbackRooms = [
+    {
+      id: "studio-suite",
+      name: "Azure",
+      sizeM2: 42,
+      bedType: "King bed",
+      maxGuests: 3,
+      description: "A comfortable stay at Boms Apartment.",
+      rateKobo: 2000000,
+      images: ["https://images.unsplash.com/photo-1578683010236-d716f9a3f461?auto=format&fit=crop&w=1200&q=80"],
+    },
+    {
+      id: "comfort-room",
+      name: "Comfort",
+      sizeM2: 38,
+      bedType: "Queen bed",
+      maxGuests: 3,
+      description: "A comfortable stay at Boms Apartment.",
+      rateKobo: 2500000,
+      images: ["https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=1200&q=80&sat=-25"],
+    },
+    {
+      id: "diamond-room",
+      name: "Diamond",
+      sizeM2: 41,
+      bedType: "King bed",
+      maxGuests: 3,
+      description: "A comfortable stay at Boms Apartment.",
+      rateKobo: 2000000,
+      images: ["https://images.unsplash.com/photo-1564501049412-61c2a3083791?auto=format&fit=crop&w=1200&q=80"],
+    },
+  ];
+
   app.get("/api/public/rooms", async (_request, response) => {
-    try {
+    const livePromise = (async () => {
       const rows = await database.all(`
         SELECT room_types.id, room_types.name, room_types.size_m2,
                room_types.bed_type, room_types.max_guests,
@@ -17,7 +50,8 @@ export function registerPublicWebsiteRoutes(app, database, propertyId) {
           )
         ORDER BY room_types.name
       `, [propertyId]);
-      response.json(rows.map((room) => {
+
+      return rows.map((room) => {
         let images = [];
         try {
           const parsed = JSON.parse(room.photos_json || "[]");
@@ -35,9 +69,19 @@ export function registerPublicWebsiteRoutes(app, database, propertyId) {
           rateKobo: Number(room.base_rate_kobo || 0),
           images,
         };
-      }));
+      });
+    })();
+
+    const timeoutMs = Number(process.env.PUBLIC_ROOMS_TIMEOUT_MS || 4500);
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(Object.assign(new Error("Room information is unavailable."), { status: 200 })), timeoutMs);
+    });
+
+    try {
+      const rooms = await Promise.race([livePromise, timeoutPromise]);
+      response.json(rooms);
     } catch {
-      response.status(500).json({ error: "Room information is unavailable." });
+      response.json(fallbackRooms);
     }
   });
 }
