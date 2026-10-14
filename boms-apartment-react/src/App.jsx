@@ -456,7 +456,7 @@ function InputField({ field, value, onChange }) {
           className={base}
         >
           {field.options.map((option) => (
-            <option key={option.value} value={option.value}>
+            <option key={option.value} value={option.value} disabled={option.disabled}>
               {option.label}
             </option>
           ))}
@@ -500,11 +500,6 @@ const guestOptionList = (data) =>
     value: guest.id,
     label: `${guest.name} · ${guest.phone}`,
   }));
-const unitOptionList = (data) =>
-  data.units.map((unit) => ({
-    value: unit.id,
-    label: `${unit.number} · ${roomTypeFor(data, unit.roomTypeId)?.name || "Room"}`,
-  }));
 const staffOptionList = (data) =>
   data.users
     .filter((user) => user.active)
@@ -517,18 +512,6 @@ function BookingDialog({ data, role, onClose, onSave, record }) {
   const [checkIn, setCheckIn] = useState(initialCheckIn);
   const [checkOut, setCheckOut] = useState(initialCheckOut);
   const initialUnit = record && unitFor(data, record.unitId);
-  const managedRoomTypes = data.roomTypes.filter((type) =>
-    data.units.some((unit) => unit.databaseRoom && unit.roomTypeId === type.id),
-  );
-  const bookingRoomTypes = record && !initialUnit?.databaseRoom
-    ? data.roomTypes.filter((type) => type.id === initialUnit?.roomTypeId)
-    : managedRoomTypes.length
-      ? managedRoomTypes
-      : data.roomTypes;
-  const [roomTypeId, setRoomTypeId] = useState(initialUnit?.roomTypeId || managedRoomTypes[0]?.id || data.roomTypes[0]?.id || "");
-  const effectiveRoomTypeId = bookingRoomTypes.some((type) => type.id === roomTypeId)
-    ? roomTypeId
-    : bookingRoomTypes[0]?.id || "";
   const [unitId, setUnitId] = useState(record?.unitId || "");
   const [guestId, setGuestId] = useState(record?.guestId || data.guests[0]?.id || "");
   const [adults, setAdults] = useState(record?.adults || 1);
@@ -539,18 +522,27 @@ function BookingDialog({ data, role, onClose, onSave, record }) {
   const [status, setStatus] = useState(record?.status || "confirmed");
   const [error, setError] = useState("");
   const nights = nightsBetween(checkIn, checkOut);
-  const candidates = data.units.filter(
-    (unit) =>
-      ((unit.databaseRoom && unit.rateKobo > 0) || unit.id === record?.unitId) &&
-      unit.roomTypeId === effectiveRoomTypeId &&
-      isUnitAvailable(
-        unit,
-        checkIn,
-        checkOut,
-        data.bookings.filter((booking) => booking.id !== record?.id),
-        data.blocks || [],
-      ),
+  const selectableRooms = data.units.filter((unit) => unit.databaseRoom || unit.id === record?.unitId);
+  const otherBookings = data.bookings.filter((booking) => booking.id !== record?.id);
+  const candidates = selectableRooms.filter((unit) =>
+    ((unit.databaseRoom && unit.rateKobo > 0) || unit.id === record?.unitId) &&
+    isUnitAvailable(unit, checkIn, checkOut, otherBookings, data.blocks || []),
   );
+  const candidateIds = new Set(candidates.map((unit) => unit.id));
+  const roomOptions = selectableRooms.map((unit) => {
+    const isBooked = otherBookings.some((booking) =>
+      booking.unitId === unit.id &&
+      ["hold", "confirmed", "checked_in"].includes(booking.status) &&
+      booking.checkIn < checkOut && booking.checkOut > checkIn,
+    );
+    const label = unit.name || `Room ${unit.number}`;
+    const availability = isBooked ? "Booked" : candidateIds.has(unit.id) ? "Available" : unit.rateKobo > 0 ? "Unavailable" : "Rate needed";
+    return {
+      value: unit.id,
+      label: `${label} · ${availability}`,
+      disabled: !candidateIds.has(unit.id) && unit.id !== record?.unitId,
+    };
+  });
   const selectedUnit =
     candidates.find((unit) => unit.id === unitId) || candidates[0];
   const discountKobo = Math.round(Number(discountNaira || 0) * 100);
@@ -622,19 +614,6 @@ function BookingDialog({ data, role, onClose, onSave, record }) {
             value={guestId}
             onChange={(event) => setGuestId(event.target.value)}
           />
-          <InputField
-            field={{
-              name: "roomTypeId",
-              label: "Room type",
-              type: "select",
-              options: roomOptionList({ ...data, roomTypes: bookingRoomTypes }),
-            }}
-            value={effectiveRoomTypeId}
-            onChange={(event) => {
-              setRoomTypeId(event.target.value);
-              setUnitId("");
-            }}
-          />
           {!data.units.some((unit) => unit.databaseRoom && unit.rateKobo > 0) && (
             <p className="text-sm text-amber-800 sm:col-span-2">
               An admin must enter each room’s nightly rate before it can be reserved.
@@ -678,12 +657,9 @@ function BookingDialog({ data, role, onClose, onSave, record }) {
           <InputField
             field={{
               name: "unitId",
-              label: "Available unit",
+              label: "Room",
               type: "select",
-              options: candidates.map((unit) => ({
-                value: unit.id,
-                label: `Unit ${unit.number} · ${formatMoney(unit.rateKobo)}/night`,
-              })),
+              options: [{ value: "", label: "Select a room", disabled: true }, ...roomOptions],
             }}
             value={selectedUnit?.id || ""}
             onChange={(event) => setUnitId(event.target.value)}
@@ -751,7 +727,7 @@ function BookingDialog({ data, role, onClose, onSave, record }) {
         )}
         {!candidates.length && (
           <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            No units of this type are available for those dates.
+            No rooms are available for those dates. Rooms with overlapping reservations are marked “Booked”.
           </p>
         )}
         {quote && (
@@ -1348,7 +1324,7 @@ function RecordDialog({ type, data, onClose, onSave, record }) {
   );
 }
 
-function DashboardOrderComposer({ data, rooms, fnbData, loading, canAddMenu, onAddMenu, onSave }) {
+function DashboardOrderComposer({ data, rooms, roomsLoading, roomsError, fnbData, loading, canAddMenu, onAddMenu, onSave }) {
   const [station, setStation] = useState("kitchen");
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("cash");
@@ -1358,6 +1334,11 @@ function DashboardOrderComposer({ data, rooms, fnbData, loading, canAddMenu, onA
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const roomScrollerRef = useRef(null);
+  useEffect(() => {
+    if (!roomsLoading && selectedRoomId && !rooms.some((room) => room.id === selectedRoomId)) {
+      setSelectedRoomId("");
+    }
+  }, [rooms, roomsLoading, selectedRoomId]);
   const stationItems = fnbData.menuItems.filter((item) => item.station === station);
   const normalizedName = (name = "") => name.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const catalogCards = station === "kitchen"
@@ -1446,6 +1427,9 @@ function DashboardOrderComposer({ data, rooms, fnbData, loading, canAddMenu, onA
               <span className="block p-2.5"><span className="block truncate text-sm font-semibold text-[#2c3b34]">{room.name || `Room ${room.number}`}</span><span className="mt-0.5 block truncate text-xs text-[#77857d]">{room.roomTypeName || "Room"} · {room.status.replaceAll("_", " ")}</span></span>
             </button>;
           })}
+          {roomsLoading && <p className="py-8 text-sm text-[#718078]">Loading rooms from the property database…</p>}
+          {!roomsLoading && roomsError && <p role="alert" className="py-8 text-sm text-rose-700">Could not load rooms from the property database: {roomsError}</p>}
+          {!roomsLoading && !roomsError && rooms.length === 0 && <p className="py-8 text-sm text-[#718078]">No rooms are configured in the property database.</p>}
         </div>
       </section>
       <div className="mb-4 flex justify-end">
@@ -1556,6 +1540,8 @@ function LowStockRestockBanner({ items, role, onNavigate, onRequestRestock }) {
 function Dashboard({
   data,
   databaseRooms,
+  roomsLoading,
+  roomsError,
   fnbData,
   fnbLoading,
   restockRequests = [],
@@ -1611,10 +1597,7 @@ function Dashboard({
     inventory: data.inventory,
     settings: data.settings,
   }, TODAY, (typeof lagosClock !== "undefined" ? lagosClock.time : "12:00"));
-  const roomInventory = databaseRooms?.length ? databaseRooms : data.units.map((unit) => {
-    const roomType = roomTypeFor(data, unit.roomTypeId);
-    return { ...unit, roomTypeName: roomType?.name || "Room", images: roomType?.images || [] };
-  });
+  const roomInventory = databaseRooms || [];
   const defaultRoomCheckout = defaultCheckoutDate(TODAY);
   const bookableRooms = roomInventory.filter((room) => {
     const unit = data.units.find((item) => item.id === room.id);
@@ -1681,7 +1664,7 @@ function Dashboard({
         </div>
         <LowStockRestockBanner items={lowStockItems} role={role} onNavigate={onNavigate} onRequestRestock={onRequestRestock} />
 
-        <DashboardOrderComposer data={data} rooms={roomInventory} fnbData={fnbData} loading={fnbLoading} canAddMenu={canAddMenu} onAddMenu={onAddMenu} onSave={onSaveFnbOrder} />
+        <DashboardOrderComposer data={data} rooms={roomInventory} roomsLoading={roomsLoading} roomsError={roomsError} fnbData={fnbData} loading={fnbLoading} canAddMenu={canAddMenu} onAddMenu={onAddMenu} onSave={onSaveFnbOrder} />
 
         <div className="mt-4 grid gap-4 xl:grid-cols-2">
           <Panel className="p-4 sm:p-5">
@@ -4330,6 +4313,7 @@ function App() {
         if (cancelled) return;
         const units = rooms.map((room) => ({
           id: room.id,
+          name: room.name,
           number: room.number,
           roomTypeId: room.roomTypeId,
           floor: room.floor || "—",
@@ -6075,6 +6059,8 @@ function App() {
         <Dashboard
           data={data}
           databaseRooms={databaseRooms}
+          roomsLoading={roomsLoading}
+          roomsError={roomsError}
           fnbData={fnbData}
           fnbLoading={fnbLoading}
           restockRequests={restockRequests}
@@ -6318,6 +6304,8 @@ function App() {
         <Dashboard
           data={data}
           databaseRooms={databaseRooms}
+          roomsLoading={roomsLoading}
+          roomsError={roomsError}
           fnbData={fnbData}
           fnbLoading={fnbLoading}
           restockRequests={restockRequests}
