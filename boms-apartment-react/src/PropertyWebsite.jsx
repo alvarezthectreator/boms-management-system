@@ -253,7 +253,7 @@ export default function PropertyWebsite() {
         <section className="galaxy-elite">
           <div className="galaxy-elite__mark"><Sparkles size={24} /></div>
           <div>
-            <p className="galaxy-eyebrow">Galaxy Elite</p>
+            <p className="galaxy-eyebrow">Boms Guest Benefits</p>
             <h2>Every stay can take you further.</h2>
             <p>Discover member benefits across stays, dining, and more.</p>
           </div>
