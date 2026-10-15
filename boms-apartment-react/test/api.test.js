@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import serverApp, { readReservations } from "../server.js";
+import { restoreVercelApiPath } from "../api/index.js";
 import { createAuthMiddleware, hashPassword, registerAuthRoutes, verifyPassword } from "../auth-api.js";
 import { registerFnbRoutes } from "../fnb-api.js";
 import { syncLowStockNotifications } from "../inventory-alerts.js";
@@ -11,6 +12,14 @@ import { registerPublicWebsiteRoutes } from "../public-website-api.js";
 import { createRouteApp, createTestDatabase, seedFnb } from "./helpers.js";
 
 const propertyId = "property_boms";
+
+test("Vercel API rewrite restores the Express path and original query", () => {
+  const request = {
+    url: "/api/index?__vercel_path=%2Fapi%2Freservations%2Fbooking-1%2Fstatus&source=dashboard",
+  };
+  restoreVercelApiPath(request);
+  assert.equal(request.url, "/api/reservations/booking-1/status?source=dashboard");
+});
 
 test("reservation reads aggregate payments without grouping guest columns", async () => {
   const database = createTestDatabase();
