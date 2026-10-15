@@ -7,7 +7,6 @@ import {
   Building2,
   CalendarDays,
   Check,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
@@ -48,9 +47,7 @@ import {
   appRoutes,
   buildRouteForPage,
   calculateQuote,
-  createInitialData,
   defaultCheckoutDate,
-  featuredFoodMenu,
   formatDate,
   formatMoney,
   getNightlyRates,
@@ -61,7 +58,6 @@ import {
 } from "./data.js";
 import PropertyWebsite from "./PropertyWebsite.jsx";
 
-const STORAGE_KEY = "boms-hotel-demo-v1";
 function getLagosDateTime() {
   const now = new Date();
   return {
@@ -86,6 +82,7 @@ const roleActions = {
     "fnb_order",
     "message",
     "concierge",
+    "manage_team",
   ],
   manager: [
     "booking",
@@ -158,30 +155,37 @@ const pageNames = Object.fromEntries(
 const buttonBase =
   "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-3.5 text-sm font-medium transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16836b] disabled:cursor-not-allowed disabled:opacity-50";
 
-function readDemoData() {
-  try {
-    const defaults = createInitialData();
-    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (!stored) return defaults;
-    const users = (stored.users || defaults.users).map((user) =>
-      user.id === "USR-002" ? { ...user, name: "Ewilliam Ndamiye" } : user,
-    );
-    return {
-      ...defaults,
-      ...stored,
-      bookings: (stored.bookings || defaults.bookings).filter((booking) => booking.databaseBooking),
-      users,
-      settings: {
-        ...defaults.settings,
-        ...stored.settings,
-        checkOutTime: "12:00",
-      },
-      auditLogs: stored.auditLogs || [],
-      blocks: stored.blocks || [],
-    };
-  } catch {
-    return createInitialData();
-  }
+function createEmptyData() {
+  return {
+    roomTypes: [],
+    rateRules: [],
+    units: [],
+    guests: [],
+    bookings: [],
+    payments: [],
+    invoices: [],
+    tasks: [],
+    inventory: [],
+    stockMovements: [],
+    suppliers: [],
+    purchaseOrders: [],
+    expenses: [],
+    conversations: [],
+    reviews: [],
+    requests: [],
+    users: [],
+    settings: {
+      checkInTime: "14:00",
+      checkOutTime: "12:00",
+      servicePercent: 0,
+      vatPercent: 0,
+      cancellationHours: 48,
+      currency: "NGN",
+    },
+    blocks: [],
+    auditLogs: [],
+    dailyClosings: [],
+  };
 }
 
 function allowed(role, action) {
@@ -920,7 +924,7 @@ function RoomEditorDialog({ room, onClose, onSave }) {
   );
 }
 
-function RecordDialog({ type, data, onClose, onSave, record }) {
+function RecordDialog({ type, data, onClose, onSave, record, role }) {
   const configurations = {
     guest: {
       title: "Add guest",
@@ -1236,11 +1240,11 @@ function RecordDialog({ type, data, onClose, onSave, record }) {
           name: "role",
           label: "Role",
           type: "select",
-          options: [
+          options: role === "ceo" ? [
             { value: "worker", label: "Worker" },
             { value: "manager", label: "Manager" },
             { value: "ceo", label: "CEO / Admin" },
-          ],
+          ] : [{ value: "worker", label: "Worker" }],
         },
       ],
     },
@@ -1387,23 +1391,12 @@ function DashboardOrderComposer({ data, rooms, roomsLoading, roomsError, fnbData
     }
   }, [rooms, roomsLoading, selectedRoomId]);
   const stationItems = fnbData.menuItems.filter((item) => item.station === station);
-  const normalizedName = (name = "") => name.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  const catalogCards = station === "kitchen"
-    ? [
-        ...featuredFoodMenu.map((dish) => ({
-          id: dish.id,
-          name: dish.name,
-          category: dish.category,
-          imageUrl: dish.imageUrl,
-          imageCredit: dish.imageCredit,
-          imageSource: dish.imageSource,
-          item: stationItems.find((entry) => normalizedName(entry.name) === normalizedName(dish.name)) || null,
-        })),
-        ...stationItems
-          .filter((item) => !featuredFoodMenu.some((dish) => normalizedName(dish.name) === normalizedName(item.name)))
-          .map((item) => ({ id: item.id, name: item.name, category: item.category, item })),
-      ]
-    : stationItems.map((item) => ({ id: item.id, name: item.name, category: item.category, item }));
+  const catalogCards = stationItems.map((item) => ({
+    id: item.id,
+    name: item.name,
+    category: item.category,
+    item,
+  }));
   const checkedInBookings = data.bookings.filter((booking) => booking.databaseBooking && booking.status === "checked_in");
   const selectedRoomBooking = checkedInBookings.find((booking) => booking.unitId === selectedRoomId);
   const subtotalKobo = cart.reduce((sum, line) => {
@@ -1607,6 +1600,7 @@ function Dashboard({
   checkoutCalls,
   housekeepingPrepAlerts,
   checkoutFollowUps,
+  lagosClock,
   role,
 }) {
   const today = lagosClock?.date || TODAY;
@@ -3946,7 +3940,7 @@ function TeamPage({ data, role, onCreate, onSettings, onUserToggle, onSetPasswor
         title="Team & settings"
         description="Manage the staff directory and property-wide operating rules."
         action={
-          role === "ceo" ? (
+          ["ceo", "manager"].includes(role) ? (
             <Button onClick={() => onCreate("user")}>
               <Plus size={16} />
               Add team member
@@ -4111,8 +4105,8 @@ function LoginScreen({ onLogin }) {
             Continue to the operations dashboard.
           </p>
           <form onSubmit={submit} className="mt-6 space-y-4">
-            <InputField field={{ name: "email", label: "Work email", type: "email" }} value={email} onChange={(event) => setEmail(event.target.value)} />
-            <InputField field={{ name: "password", label: "Password", type: "password" }} value={password} onChange={(event) => setPassword(event.target.value)} />
+            <InputField field={{ name: "email", label: "Work email", type: "email", required: true }} value={email} onChange={(event) => setEmail(event.target.value)} />
+            <InputField field={{ name: "password", label: "Password", type: "password", required: true }} value={password} onChange={(event) => setPassword(event.target.value)} />
             {error && (
               <p role="alert" className="text-sm text-rose-700">
                 {error}
@@ -4122,9 +4116,6 @@ function LoginScreen({ onLogin }) {
               {submitting ? "Signing in…" : "Sign in"} <ArrowRight size={16} />
             </Button>
           </form>
-          <p className="mt-5 rounded-lg bg-[#f4f7f4] p-3 text-xs leading-5 text-[#718078]">
-            Demo access: <strong className="font-semibold text-[#1d2b24]">demo@boms.local</strong> / <strong className="font-semibold text-[#1d2b24]">password</strong>
-          </p>
         </Panel>
         <p className="mt-4 text-center text-xs text-[#839087]">
           Africa/Lagos · NGN
@@ -4177,23 +4168,13 @@ function AuditPage({ data }) {
   );
 }
 
-const DEMO_LOGIN = {
-  email: "demo@boms.local",
-  password: "password",
-  user: {
-    id: "demo-user",
-    name: "Demo Manager",
-    role: "ceo",
-  },
-};
-
 function App() {
-  const [data, setData] = useState(readDemoData);
-  const initialData = useRef(data);
+  const [data, setData] = useState(createEmptyData);
   const [page, setPage] = useState("dashboard");
   const [isPropertyWebsite, setIsPropertyWebsite] = useState(() => window.location.pathname === "/");
   const [role, setRole] = useState("worker");
   const [currentUserId, setCurrentUserId] = useState("");
+  const [currentUserName, setCurrentUserName] = useState("");
   const [signedIn, setSignedIn] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -4213,40 +4194,17 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    const savedSession = localStorage.getItem("boms-demo-session");
-    const clearSavedSession = () => {
-      localStorage.removeItem("boms-demo-session");
-      if (!cancelled) {
-        setCurrentUserId("");
-        setRole("worker");
-        setSignedIn(false);
-      }
-      if (window.location.pathname !== "/") window.history.replaceState({}, "", "/login");
-    };
-    if (savedSession) {
-      try {
-        const session = JSON.parse(savedSession);
-        if (!cancelled && session?.user) {
-          setCurrentUserId(session.user.id);
-          setRole(session.user.role);
-          setSignedIn(true);
-        }
-      } catch {
-        localStorage.removeItem("boms-demo-session");
-      }
-    }
     fetch("/api/auth/me")
       .then(async (response) => response.ok ? response.json() : null)
       .then((result) => {
         if (!cancelled && result?.user) {
           setCurrentUserId(result.user.id);
+          setCurrentUserName(result.user.name);
           setRole(result.user.role);
           setSignedIn(true);
-        } else if (!cancelled && savedSession) {
-          clearSavedSession();
         }
       })
-      .catch(() => { if (!cancelled && savedSession) clearSavedSession(); })
+      .catch(() => {})
       .finally(() => { if (!cancelled) setAuthLoading(false); });
     return () => { cancelled = true; };
   }, []);
@@ -4302,8 +4260,8 @@ function App() {
         if (cancelled) return;
         setRoomsError(error.message || "The room database is unavailable.");
         if (error.status === 401) {
-          localStorage.removeItem("boms-demo-session");
           setCurrentUserId("");
+          setCurrentUserName("");
           setRole("worker");
           setSignedIn(false);
           window.history.replaceState({}, "", "/login");
@@ -4343,27 +4301,6 @@ function App() {
     if (!signedIn) return () => { cancelled = true; };
     async function loadDatabaseData() {
       try {
-        const bootstrapResponse = await fetch("/api/operations/bootstrap", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            guests: initialData.current.guests,
-            inventory: initialData.current.inventory,
-            expenses: initialData.current.expenses,
-            suppliers: initialData.current.suppliers,
-            purchaseOrders: initialData.current.purchaseOrders,
-            conversations: initialData.current.conversations,
-            reviews: initialData.current.reviews,
-            requests: initialData.current.requests.map((request) => ({
-              ...request,
-              unitNumber: initialData.current.units.find((unit) => unit.id === request.unitId)?.number || "",
-            })),
-            users: initialData.current.users,
-            settings: { ...initialData.current.settings, servicePercent: 0, vatPercent: 0 },
-            dailyClosings: initialData.current.dailyClosings,
-          }),
-        });
-        if (!bootstrapResponse.ok) throw new Error("Demo operations data could not be moved into the database.");
         const [roomsResponse, reservationsResponse, blocksResponse, operationsResponse, guestsResponse, fnbResponse, workspaceResponse, notificationsResponse, restockResponse] = await Promise.all([
           fetch("/api/rooms"),
           fetch("/api/reservations"),
@@ -4521,9 +4458,6 @@ function App() {
     };
   }, [signedIn]);
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  }, [data]);
   useEffect(() => {
     const updateConnection = () => setIsOnline(navigator.onLine);
     window.addEventListener("online", updateConnection);
@@ -4888,19 +4822,6 @@ function App() {
     }
   }
   async function signIn(email, password) {
-    const normalisedEmail = String(email || "").trim().toLowerCase();
-    const normalisedPassword = String(password || "");
-    if (normalisedEmail === DEMO_LOGIN.email && normalisedPassword === DEMO_LOGIN.password) {
-      const user = DEMO_LOGIN.user;
-      setCurrentUserId(user.id);
-      setRole(user.role);
-      setSignedIn(true);
-      setIsPropertyWebsite(false);
-      setPage("dashboard");
-      localStorage.setItem("boms-demo-session", JSON.stringify({ user }));
-      window.history.replaceState({}, "", appRoutes.dashboard);
-      return {};
-    }
     try {
       const response = await fetch("/api/auth/login", {
         method: "POST",
@@ -4910,6 +4831,7 @@ function App() {
       const result = await response.json().catch(() => ({}));
       if (!response.ok) return { error: result.error || "Sign in failed." };
       setCurrentUserId(result.user.id);
+      setCurrentUserName(result.user.name);
       setRole(result.user.role);
       setSignedIn(true);
       setIsPropertyWebsite(false);
@@ -4922,9 +4844,9 @@ function App() {
   }
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
-    localStorage.removeItem("boms-demo-session");
     setSignedIn(false);
     setCurrentUserId("");
+    setCurrentUserName("");
     setRole("worker");
     setIsPropertyWebsite(false);
     setPage("dashboard");
@@ -4935,7 +4857,7 @@ function App() {
       booking: "booking", guest: "booking", unit: "inspect", roomType: "inspect", rateRule: "inspect",
       task: "inspect", request: "concierge", item: "inspect", purchase: "purchase",
       stock: "stock", stockOut: "stock_use", stockAdjust: "stock", expense: "expense",
-      user: "all", setPassword: "all", refund: "refund", voidInvoice: "cancel",
+      user: "manage_team", setPassword: "all", refund: "refund", voidInvoice: "cancel",
     }[type];
     if (requiredPermission && !allowed(role, requiredPermission)) {
       notify("Your current role cannot perform that action.");
@@ -6102,7 +6024,7 @@ function App() {
       return;
     }
     printWindow.document.write(
-      `<title>${invoice.id}</title><style>body{font:14px Arial,sans-serif;margin:48px;color:#203028}h1{font-size:24px}table{width:100%;border-collapse:collapse;margin-top:28px}td{border-bottom:1px solid #ddd;padding:12px 0}.total{font-size:18px;font-weight:bold}</style><h1>Boms Apartment</h1><p>Guest invoice · ${invoice.id}</p><p>${guest?.name || "Guest"} · Booking ${invoice.bookingId}</p><table><tr><td>Invoice total</td><td>${formatMoney(invoice.totalKobo)}</td></tr><tr><td>Paid</td><td>${formatMoney(invoice.paidKobo)}</td></tr><tr class="total"><td>Balance</td><td>${formatMoney(Math.max(0, invoice.totalKobo - invoice.paidKobo))}</td></tr></table><p>Generated from the local UI demo.</p>`,
+      `<title>${invoice.id}</title><style>body{font:14px Arial,sans-serif;margin:48px;color:#203028}h1{font-size:24px}table{width:100%;border-collapse:collapse;margin-top:28px}td{border-bottom:1px solid #ddd;padding:12px 0}.total{font-size:18px;font-weight:bold}</style><h1>Boms Apartment</h1><p>Guest invoice · ${invoice.id}</p><p>${guest?.name || "Guest"} · Booking ${invoice.bookingId}</p><table><tr><td>Invoice total</td><td>${formatMoney(invoice.totalKobo)}</td></tr><tr><td>Paid</td><td>${formatMoney(invoice.paidKobo)}</td></tr><tr class="total"><td>Balance</td><td>${formatMoney(Math.max(0, invoice.totalKobo - invoice.paidKobo))}</td></tr></table>`,
     );
     printWindow.document.close();
     printWindow.print();
@@ -6121,25 +6043,20 @@ function App() {
   const housekeepingPrepAlerts = lagosClock.time >= "11:30" && lagosClock.time < "13:00"
     ? todayCheckouts
     : [];
-  const currentUser =
-    data.users.find((user) => user.id === currentUserId) || data.users[0];
+  const currentUser = data.users.find((user) => user.id === currentUserId) || {
+    id: currentUserId,
+    name: currentUserName,
+    role,
+  };
   const visibleNavGroups = navGroups
     .map((group) => ({
       ...group,
       items: group.items
-        .filter(([key]) => key !== "audit" || role === "ceo")
+        .filter(([key]) => key !== "audit" || role !== "worker")
         .filter(([key]) => key !== "financials" || role !== "worker")
         .filter(([key]) => key !== "weeklyReport" || role !== "worker"),
     }))
     .filter((group) => group.items.length);
-  const primaryNavKeys = new Set(["dashboard", "bookings", "rooms", "calendar", "housekeeping", "restaurant"]);
-  const primaryNavGroups = visibleNavGroups
-    .map((group) => ({ ...group, items: group.items.filter(([key]) => primaryNavKeys.has(key)) }))
-    .filter((group) => group.items.length);
-  const moreNavGroups = visibleNavGroups
-    .map((group) => ({ ...group, items: group.items.filter(([key]) => !primaryNavKeys.has(key)) }))
-    .filter((group) => group.items.length);
-  const moreNavigationActive = moreNavGroups.some((group) => group.items.some(([key]) => key === page));
   const renderNavGroups = (groups) => groups.map((group) => (
     <div key={group.label}>
       <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#9aa69f]">{group.label}</p>
@@ -6272,6 +6189,7 @@ function App() {
           checkoutCalls={checkoutCalls}
           housekeepingPrepAlerts={housekeepingPrepAlerts}
           checkoutFollowUps={checkoutFollowUps}
+          lagosClock={lagosClock}
         />
       );
       break;
@@ -6483,14 +6401,14 @@ function App() {
       break;
     case "audit":
       content =
-        role === "ceo" ? (
+        role === "ceo" || role === "manager" ? (
           <AuditPage data={data} />
         ) : (
           <Panel>
             <EmptyPanel
               icon={ShieldCheck}
-              title="CEO access required"
-              detail="Audit history is restricted to the CEO role."
+              title="Manager access required"
+              detail="Audit history is restricted to managers and CEOs."
             />
           </Panel>
         );
@@ -6521,6 +6439,7 @@ function App() {
           checkoutCalls={checkoutCalls}
           housekeepingPrepAlerts={housekeepingPrepAlerts}
           checkoutFollowUps={checkoutFollowUps}
+          lagosClock={lagosClock}
         />
       );
   }
@@ -6560,13 +6479,7 @@ function App() {
             className="min-h-0 flex-1 space-y-5 overflow-y-auto"
             aria-label="Main navigation"
           >
-            {renderNavGroups(primaryNavGroups)}
-            {moreNavGroups.length > 0 && <details open={moreNavigationActive || undefined} className="border-t border-[#e7eee8] pt-3">
-              <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between rounded-lg px-3 text-sm font-semibold text-[#526157] hover:bg-[#f3f7f4]">
-                More tools <ChevronDown size={16} />
-              </summary>
-              <div className="mt-3 space-y-4">{renderNavGroups(moreNavGroups)}</div>
-            </details>}
+            {renderNavGroups(visibleNavGroups)}
           </nav>
           <Button className="mt-4 w-full" onClick={() => requestCreate("booking")}><Plus size={16} />Book a room</Button>
         </aside>
@@ -6702,29 +6615,10 @@ function App() {
               <button onClick={signOut} className="grid size-10 place-items-center rounded-lg border border-[#e6ece8] text-[#647269] hover:bg-[#f7f9f7]" aria-label="Sign out" title="Sign out"><LogOut size={17} /></button>
             </div>
           </header>
-          {!isOnline && <div role="status" className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900 sm:px-6 lg:px-8"><CircleAlert size={15} />You’re offline. This demo keeps changes on this device; production sync is not connected.</div>}
+          {!isOnline && <div role="status" className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900 sm:px-6 lg:px-8"><CircleAlert size={15} />You’re offline. Changes are unavailable until the connection is restored.</div>}
           {mobileNavOpen && (
-            <nav className="flex gap-1 overflow-x-auto border-b border-[#e4ebe6] bg-white px-3 py-2 lg:hidden">
-              {primaryNavGroups
-                .flatMap((group) => group.items)
-                .map(([key, label, Icon]) => (
-                  <button
-                    key={key}
-                    onClick={() => navigate(key)}
-                    className={`inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-xs ${page === key ? "bg-[#eaf58a] text-[#29320b]" : "text-[#647269]"}`}
-                  >
-                    <Icon size={15} />
-                    {label}
-                  </button>
-                ))}
-              {moreNavGroups.length > 0 && <details className="relative shrink-0">
-                <summary className="inline-flex min-h-9 cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[#647269] hover:bg-[#f3f7f4]">
-                  More <ChevronDown size={14} />
-                </summary>
-                <div className="absolute right-0 top-full z-40 mt-1 max-h-[60vh] w-56 overflow-y-auto rounded-lg border border-[#e2e9e4] bg-white p-2 shadow-xl">
-                  {renderNavGroups(moreNavGroups)}
-                </div>
-              </details>}
+            <nav aria-label="Main navigation" className="grid max-h-[60vh] grid-cols-2 gap-x-3 gap-y-4 overflow-y-auto border-b border-[#e4ebe6] bg-white px-3 py-4 lg:hidden">
+              {renderNavGroups(visibleNavGroups)}
             </nav>
           )}
           <main className="mx-auto w-full max-w-[1680px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
@@ -6769,6 +6663,7 @@ function App() {
             type={modal.type}
             data={data}
             record={modal.record}
+            role={role}
             onClose={() => setModal(null)}
             onSave={saveRecord}
           />

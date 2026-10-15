@@ -4,12 +4,10 @@ import {
   ArrowRight,
   ArrowUpRight,
   Clock3,
-  Dumbbell,
   LogIn,
   Menu,
   Phone,
   Sparkles,
-  Utensils,
   Waves,
   X,
 } from "lucide-react";
@@ -21,38 +19,6 @@ const siteToday = new Intl.DateTimeFormat("sv-SE", { timeZone: "Africa/Lagos" })
 const nextDay = new Date(`${siteToday}T00:00:00Z`);
 nextDay.setUTCDate(nextDay.getUTCDate() + 1);
 const siteTomorrow = nextDay.toISOString().slice(0, 10);
-const fallbackRooms = [
-  {
-    id: "studio",
-    name: "Studio Suite",
-    sizeM2: 42,
-    bedType: "King bed",
-    maxGuests: 2,
-    description: "A stylish suite with a calming palette and all the essentials for a comfortable stay.",
-    rateKobo: 8500000,
-    images: ["/galaxy/hotels/port-harcourt/rooms/presidential/01.jpg"],
-  },
-  {
-    id: "deluxe",
-    name: "Deluxe Room",
-    sizeM2: 36,
-    bedType: "Queen bed",
-    maxGuests: 3,
-    description: "A welcoming room with generous natural light, warm finishes, and refined comfort.",
-    rateKobo: 6800000,
-    images: ["/galaxy/hotels/port-harcourt/cover.jpg"],
-  },
-  {
-    id: "family",
-    name: "Family Retreat",
-    sizeM2: 52,
-    bedType: "King bed + sofa bed",
-    maxGuests: 4,
-    description: "Spacious and contemporary, designed for longer stays and relaxed family time.",
-    rateKobo: 9800000,
-    images: ["/galaxy/hotels/port-harcourt/facilities/restaurant.jpg"],
-  },
-];
 const naira = new Intl.NumberFormat("en-NG", {
   style: "currency",
   currency: "NGN",
@@ -144,13 +110,13 @@ export default function PropertyWebsite() {
       })
       .then((result) => {
         if (cancelled) return;
-        setRooms(Array.isArray(result) && result.length > 0 ? result : fallbackRooms);
+        setRooms(Array.isArray(result) ? result : []);
         setRoomsStatus("ready");
       })
       .catch(() => {
         if (!cancelled) {
-          setRooms(fallbackRooms);
-          setRoomsStatus("ready");
+          setRooms([]);
+          setRoomsStatus("error");
         }
       });
     return () => { cancelled = true; };

@@ -7,6 +7,7 @@
     "dev": "concurrently -k \"node server.js\" \"vite\"",
     "start:api": "node server.js",
     "setup:admin": "node scripts/setup-admin.js",
+    "setup:manager": "node scripts/setup-manager.js",
     "build": "vite build",
     "lint": "oxlint",
     "test": "node --test test/*.test.js",

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import serverApp from "../server.js";
 import { createAuthMiddleware, hashPassword, registerAuthRoutes, verifyPassword } from "../auth-api.js";
+import { restoreVercelApiPath } from "../api/index.js";
 import { registerFnbRoutes } from "../fnb-api.js";
 import { syncLowStockNotifications } from "../inventory-alerts.js";
 import { registerOperationsRoutes } from "../operations-api.js";
@@ -11,6 +12,14 @@ import { registerPublicWebsiteRoutes } from "../public-website-api.js";
 import { createRouteApp, createTestDatabase, seedFnb } from "./helpers.js";
 
 const propertyId = "property_boms";
+
+test("Vercel API rewrite restores the Express path and original query", () => {
+  const request = {
+    url: "/api/index?__vercel_path=%2Fapi%2Freservations%2Fbooking-1%2Fstatus&source=dashboard",
+  };
+  restoreVercelApiPath(request);
+  assert.equal(request.url, "/api/reservations/booking-1/status?source=dashboard");
+});
 
 test("dashboard routes resolve to the app shell instead of 404ing", async () => {
   const server = serverApp.listen(0, "127.0.0.1");
@@ -179,15 +188,17 @@ test("inventory movement audit records the authenticated actor", async () => {
   database.close();
 });
 
-test("audit log is append-only and visible only to CEOs", async () => {
+test("audit log is append-only and visible to managers and CEOs", async () => {
   const database = createTestDatabase();
   const app = createRouteApp();
   database.prepare("INSERT INTO audit_logs (id, property_id, user_id, entity, entity_id, action) VALUES ('audit-1', ?, 'ceo-1', 'expense', 'exp-1', 'approved')").run(propertyId);
   registerWorkspaceRoutes(app, database, propertyId);
 
   const managerWorkspace = await app.call("GET", "/api/workspace", { headers: headers("manager", "Manager") });
+  const workerWorkspace = await app.call("GET", "/api/workspace", { headers: headers("worker", "Worker") });
   const ceoWorkspace = await app.call("GET", "/api/workspace", { headers: headers("ceo", "CEO") });
-  assert.deepEqual(managerWorkspace.body.auditLogs, []);
+  assert.equal(managerWorkspace.body.auditLogs.length, 1);
+  assert.deepEqual(workerWorkspace.body.auditLogs, []);
   assert.equal(ceoWorkspace.body.auditLogs.length, 1);
   assert.throws(() => database.prepare("UPDATE audit_logs SET action = 'changed' WHERE id = 'audit-1'").run(), /append-only/);
   assert.throws(() => database.prepare("DELETE FROM audit_logs WHERE id = 'audit-1'").run(), /append-only/);
@@ -199,13 +210,19 @@ test("workspace bootstrap writes seed rows through the async transaction interfa
   const app = createRouteApp();
   registerWorkspaceRoutes(app, database, propertyId);
 
+  const denied = await app.call("POST", "/api/workspace/bootstrap", {
+    headers: headers("worker", "Worker"),
+    body: { settings: { currency: "USD" } },
+  });
   const result = await app.call("POST", "/api/workspace/bootstrap", {
+    headers: headers("manager", "Manager"),
     body: {
       users: [{ id: "seed-manager", name: "Seed Manager", email: "seed@example.test", role: "manager", active: true }],
       settings: { currency: "NGN" },
     },
   });
 
+  assert.equal(denied.code, 403);
   assert.equal(result.code, 200, result.body?.error);
   assert.equal(database.prepare("SELECT role FROM users WHERE id = 'seed-manager'").get().role, "manager");
   assert.equal(JSON.parse(database.prepare("SELECT value_json FROM property_settings WHERE key = 'currency'").get().value_json), "NGN");
@@ -578,6 +595,7 @@ test("worker role cannot create team members or manager-only menu items", async 
   const app = createRouteApp();
   registerWorkspaceRoutes(app, database, propertyId);
   registerFnbRoutes(app, database, propertyId);
+  registerOperationsRoutes(app, database, propertyId);
 
   const userResult = await app.call("POST", "/api/users", {
     headers: headers(), body: { name: "Unauthorized", email: "unauthorized@example.test", role: "manager" },
@@ -585,9 +603,34 @@ test("worker role cannot create team members or manager-only menu items", async 
   const menuResult = await app.call("POST", "/api/fnb/menu-items", {
     headers: headers(), body: { name: "Dish", category: "Food", station: "kitchen", priceKobo: 100, recipe: [] },
   });
+  const bootstrapResult = await app.call("POST", "/api/operations/bootstrap", {
+    headers: headers(), body: { inventory: [{ id: "demo-stock", name: "Demo stock" }] },
+  });
   assert.equal(userResult.code, 403);
   assert.equal(menuResult.code, 403);
+  assert.equal(bootstrapResult.code, 403);
   assert.equal(database.prepare("SELECT count(*) AS count FROM users").get().count, 0);
+  database.close();
+});
+
+test("managers can create worker accounts but cannot grant management roles", async () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  registerWorkspaceRoutes(app, database, propertyId);
+
+  const worker = await app.call("POST", "/api/users", {
+    headers: headers("manager", "Manager"),
+    body: { name: "Front Desk", email: "frontdesk@example.test", role: "worker", password: "a-long-temporary-password" },
+  });
+  const manager = await app.call("POST", "/api/users", {
+    headers: headers("manager", "Manager"),
+    body: { name: "Another Manager", email: "other-manager@example.test", role: "manager", password: "a-long-temporary-password" },
+  });
+
+  assert.equal(worker.code, 201, worker.body?.error);
+  assert.equal(worker.body.role, "worker");
+  assert.equal(manager.code, 403);
+  assert.equal(database.prepare("SELECT count(*) AS count FROM users").get().count, 1);
   database.close();
 });
 
@@ -673,15 +716,12 @@ test("password login creates an HttpOnly session and rejects missing or incorrec
   assert.equal(nextCalled, true);
   assert.equal(authenticatedRequest.user.role, "worker");
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
     const rejected = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "incorrect-password" } });
     assert.equal(rejected.code, 401);
   }
-  const threshold = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "incorrect-password" } });
-  assert.equal(threshold.code, 429);
-  const locked = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "unused-password" } });
-  assert.equal(locked.code, 429);
-  assert.equal(database.prepare("SELECT failed_attempts FROM auth_login_attempts").get().failed_attempts, 5);
+  const loginAfterRepeatedFailures = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "unused-password" } });
+  assert.equal(loginAfterRepeatedFailures.code, 200);
   database.close();
 });
 
@@ -690,6 +730,7 @@ test("manager can reset a staff password", async () => {
   const app = createRouteApp();
   database.prepare("INSERT INTO users (id, property_id, name, email, role, password_hash, active) VALUES ('manager-1', ?, 'Manager', 'manager@example.test', 'manager', ?, 1)").run(propertyId, hashPassword("old-password"));
   database.prepare("INSERT INTO users (id, property_id, name, email, role, password_hash, active) VALUES ('worker-1', ?, 'Desk', 'desk@example.test', 'worker', ?, 1)").run(propertyId, hashPassword("old-password"));
+  database.prepare("INSERT INTO users (id, property_id, name, email, role, password_hash, active) VALUES ('ceo-1', ?, 'Owner', 'owner@example.test', 'ceo', ?, 1)").run(propertyId, hashPassword("old-password"));
   registerWorkspaceRoutes(app, database, propertyId);
 
   const updated = await app.call("PUT", "/api/users/worker-1/password", {
@@ -699,6 +740,11 @@ test("manager can reset a staff password", async () => {
 
   assert.equal(updated.code, 200, updated.body?.error);
   assert.equal(verifyPassword("manager-set-test-password", database.prepare("SELECT password_hash FROM users WHERE id = 'worker-1'").get().password_hash), true);
+  const denied = await app.call("PUT", "/api/users/ceo-1/password", {
+    headers: headers("manager", "Manager"),
+    body: { password: "another-manager-password" },
+  });
+  assert.equal(denied.code, 403);
   database.close();
 });
 

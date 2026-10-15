@@ -14,11 +14,11 @@ The dev command starts the Vite app at `http://localhost:5173/` and the Express 
 
 Checkout defaults to 12:00 p.m. Lagos time. From 11:30 a.m., workers and managers see a dashboard and bell reminder for checked-in departures that day, including a shortcut to the housekeeping board. After 1:00 p.m., workers also see an overdue-checkout alert with a direct guest call link.
 
-Older demo reservations are still browser-local because their room identifiers do not match the current database rooms. Financial totals exclude those records and use persisted hotel and direct F&B transactions only. Sample reviews whose booking records do not exist are not imported. Other prototype-only screens may still use browser-local data.
+Staff sign-in does not create or import sample guests, rooms, inventory, reviews, or finance records. Management screens display records returned by the configured database; an empty database stays empty until staff add real property data. Existing browser-cached prototype data is ignored.
 
 ## Staff authentication
 
-Staff sign in with their work email and an individual password. Passwords use Node.js scrypt hashes; sessions use hashed, expiring database tokens in HttpOnly, SameSite cookies, and Secure cookies in production. Five failed attempts from one client address trigger a 15-minute lockout stored in the database. Managers and CEOs can create staff accounts or reset passwords from Team & settings; passwords must be at least 12 characters. Set the initial CEO password with `npm run setup:admin` from `boms-apartment-react`.
+Staff sign in with their work email and an individual password. Passwords use Node.js scrypt hashes; sessions use hashed, expiring database tokens in HttpOnly, SameSite cookies, and Secure cookies in production. The app does not lock out sign-in after failed attempts; deploy an edge-level rate limit to mitigate password guessing. Managers can create worker accounts and reset staff passwords from Team & settings; CEOs can create any role and control account status. Passwords must be at least 12 characters. Run `npm run setup:manager` to create or reset a manager account, or `npm run setup:admin` to reset an existing CEO account.
 
 Production deployment still requires HTTPS at the public edge, a correctly configured reverse proxy, protected database/backups, monitoring, and an account recovery procedure. Set `NODE_ENV=production` and `TRUST_PROXY_HOPS` to the exact number of trusted proxy hops so secure cookies and client-address throttling work correctly. The API binds to loopback by default. Review deployment access controls before exposing the service to the internet; this project has not undergone an independent security audit.
 

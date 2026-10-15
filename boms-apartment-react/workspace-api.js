@@ -138,6 +138,7 @@ async function readWorkspace(database, propertyId, includeAuditLogs = false) {
 
 export function registerWorkspaceRoutes(app, database, propertyId) {
   app.post("/api/workspace/bootstrap", async (request, response) => {
+    if (!requireRole(request, response, managerRoles)) return;
     try {
       await database.withTransaction(async (transaction) => {
         const timestamp = new Date().toISOString();
@@ -220,7 +221,7 @@ export function registerWorkspaceRoutes(app, database, propertyId) {
     }
   });
 
-  app.get("/api/workspace", async (request, response) => response.json(await readWorkspace(database, propertyId, request.user?.role === "ceo")));
+  app.get("/api/workspace", async (request, response) => response.json(await readWorkspace(database, propertyId, ["manager", "ceo"].includes(request.user?.role))));
 
   app.post("/api/conversations/:id/messages", async (request, response) => {
     if (!requireRole(request, response, ["worker", ...managerRoles])) return;
@@ -342,11 +343,14 @@ export function registerWorkspaceRoutes(app, database, propertyId) {
   });
 
   app.post("/api/users", async (request, response) => {
-    if (!requireRole(request, response, ["ceo"])) return;
+    if (!requireRole(request, response, ["manager", "ceo"])) return;
     const name = String(request.body.name || "").trim();
     const email = String(request.body.email || "").trim().toLowerCase();
     const role = request.body.role;
     const password = String(request.body.password || "");
+    if (request.user.role === "manager" && role !== "worker") {
+      return response.status(403).json({ error: "Managers can create worker accounts only." });
+    }
     if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !["worker", "manager", "ceo"].includes(role) || password.length < 12) {
       return response.status(400).json({ error: "Enter a name, valid email, role, and password of at least 12 characters." });
     }
@@ -379,8 +383,11 @@ export function registerWorkspaceRoutes(app, database, propertyId) {
     if (!requireRole(request, response, ["ceo", "manager"])) return;
     const password = String(request.body.password || "");
     if (password.length < 12) return response.status(400).json({ error: "Password must be at least 12 characters." });
-    const user = await database.get("SELECT id FROM users WHERE id = ? AND property_id = ? AND deleted_at IS NULL", [request.params.id, propertyId]);
+    const user = await database.get("SELECT id, role FROM users WHERE id = ? AND property_id = ? AND deleted_at IS NULL", [request.params.id, propertyId]);
     if (!user) return response.status(404).json({ error: "Team member not found." });
+    if (request.user.role === "manager" && user.role === "ceo") {
+      return response.status(403).json({ error: "Managers cannot reset CEO passwords." });
+    }
     await database.run("UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [hashPassword(password), user.id]);
     await database.run("DELETE FROM auth_sessions WHERE user_id = ?", [user.id]);
     await audit(database, propertyId, request, "user", user.id, "password_reset", null, { passwordChanged: true });

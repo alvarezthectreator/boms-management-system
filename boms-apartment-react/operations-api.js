@@ -667,6 +667,7 @@ export function registerOperationsRoutes(app, database, propertyId) {
   });
 
   app.post("/api/operations/bootstrap", async (request, response) => {
+    if (!requireRole(request, response, managerRoles)) return;
     try {
       const counts = {
         suppliers: Number((await database.get("SELECT count(*) AS n FROM suppliers WHERE property_id = ?", [propertyId])).n),

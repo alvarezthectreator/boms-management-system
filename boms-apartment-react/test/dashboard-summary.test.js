@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildDeskWorkerDashboardSummary, buildRouteForPage, calculateQuote, createInitialData, defaultCheckoutDate, featuredFoodMenu, nightsBetween, resolvePageFromRoute } from "../src/data.js";
+import { buildDeskWorkerDashboardSummary, buildRouteForPage, calculateQuote, createInitialData, defaultCheckoutDate, nightsBetween, resolvePageFromRoute } from "../src/data.js";
 
 test("routes resolve to stable page URLs", () => {
   assert.equal(buildRouteForPage("dashboard"), "/dashboard");
@@ -27,19 +27,14 @@ test("default checkout is one night after check-in", () => {
   assert.equal(nightsBetween(checkIn, checkOut), 1);
 });
 
-test("featured food menu contains the requested dishes with attributed photos", () => {
-  assert.deepEqual(featuredFoodMenu.map((item) => item.name), [
-    "Noodles",
-    "Jollof rice",
-    "Spaghetti",
-    "White rice",
-    "Chicken pepper soup",
-    "Catfish pepper soup",
-    "EA pepper soup",
-    "Afang soup",
-    "Egusi soup",
-  ]);
-  assert.ok(featuredFoodMenu.every((item) => item.imageUrl && item.imageCredit && item.imageSource));
+test("new installations start without sample room, menu, or business records", () => {
+  const data = createInitialData();
+  assert.equal(data.roomTypes.length, 0);
+  assert.equal(data.units.length, 0);
+  assert.equal(data.guests.length, 0);
+  assert.equal(data.inventory.length, 0);
+  assert.equal(data.expenses.length, 0);
+  assert.equal(data.users.length, 0);
 });
 
 test("desk worker summary counts distinct rooms occupied today", () => {
