@@ -45,12 +45,21 @@ export function createTestDatabase() {
     BEGIN
       SELECT RAISE(ABORT, 'audit log records are append-only');
     END;
-    CREATE TABLE housekeeping_tasks (id TEXT PRIMARY KEY, assigned_to_label TEXT);
+    CREATE TABLE housekeeping_tasks (
+      id TEXT PRIMARY KEY, property_id TEXT, unit_id TEXT, booking_id TEXT, type TEXT,
+      status TEXT DEFAULT 'open', priority TEXT DEFAULT 'medium', assigned_to TEXT,
+      assigned_to_label TEXT, title TEXT, details TEXT, started_at TEXT, finished_at TEXT,
+      inspected_by TEXT, inspection_note TEXT, due_at TEXT, created_at TEXT,
+      updated_at TEXT, deleted_at TEXT
+    );
     CREATE TABLE property_settings (
       property_id TEXT, key TEXT, value_json TEXT, updated_at TEXT, updated_by TEXT,
       PRIMARY KEY (property_id, key)
     );
-    CREATE TABLE guests (id TEXT PRIMARY KEY, property_id TEXT, full_name TEXT, deleted_at TEXT);
+    CREATE TABLE guests (
+      id TEXT PRIMARY KEY, property_id TEXT, full_name TEXT, email TEXT, phone TEXT,
+      nationality TEXT, id_number TEXT, loyalty_tier TEXT, points INTEGER DEFAULT 0, deleted_at TEXT
+    );
     CREATE TABLE room_types (
       id TEXT PRIMARY KEY, property_id TEXT, name TEXT, size_m2 REAL, bed_type TEXT,
       max_guests INTEGER, description TEXT, base_rate_kobo INTEGER, photos_json TEXT,
@@ -64,11 +73,12 @@ export function createTestDatabase() {
       end_date TEXT, deleted_at TEXT
     );
     CREATE TABLE bookings (
-      id TEXT PRIMARY KEY, property_id TEXT, guest_id TEXT, unit_id TEXT, status TEXT,
+      id TEXT PRIMARY KEY, property_id TEXT, guest_id TEXT, unit_id TEXT, room_type_id TEXT, status TEXT,
       check_in TEXT, check_out TEXT, nights INTEGER DEFAULT 0, rate_kobo INTEGER DEFAULT 0,
       subtotal_kobo INTEGER DEFAULT 0, discount_kobo INTEGER DEFAULT 0,
       service_kobo INTEGER DEFAULT 0, vat_kobo INTEGER DEFAULT 0, total_kobo INTEGER DEFAULT 0,
-      updated_at TEXT, deleted_at TEXT
+      adults INTEGER DEFAULT 1, children INTEGER DEFAULT 0, source TEXT, requests TEXT,
+      created_at TEXT, updated_at TEXT, deleted_at TEXT
     );
     CREATE TABLE invoices (
       id TEXT PRIMARY KEY, property_id TEXT, booking_id TEXT, total_kobo INTEGER,

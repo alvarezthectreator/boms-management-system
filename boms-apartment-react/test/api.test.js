@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import serverApp from "../server.js";
+import serverApp, { readReservations } from "../server.js";
 import { createAuthMiddleware, hashPassword, registerAuthRoutes, verifyPassword } from "../auth-api.js";
 import { restoreVercelApiPath } from "../api/index.js";
 import { registerFnbRoutes } from "../fnb-api.js";
@@ -19,6 +19,25 @@ test("Vercel API rewrite restores the Express path and original query", () => {
   };
   restoreVercelApiPath(request);
   assert.equal(request.url, "/api/reservations/booking-1/status?source=dashboard");
+});
+
+test("reservation reads aggregate payments without grouping guest columns", async () => {
+  const database = createTestDatabase();
+  database.prepare("INSERT INTO guests (id, property_id, full_name, phone, email, nationality, id_number, loyalty_tier, points) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run("guest-1", propertyId, "Guest One", "08000000000", "guest@example.test", "NG", "ID-1", "Gold", 20);
+  database.prepare("INSERT INTO bookings (id, property_id, guest_id, unit_id, status, check_in, check_out, total_kobo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .run("booking-1", propertyId, "guest-1", "unit-1", "confirmed", "2026-10-15", "2026-10-16", 10000);
+  database.prepare("INSERT INTO payments (id, property_id, booking_id, amount_kobo, status, deleted_at) VALUES (?, ?, ?, ?, ?, NULL)")
+    .run("payment-1", propertyId, "booking-1", 2500, "paid");
+  database.prepare("INSERT INTO payments (id, property_id, booking_id, amount_kobo, status, deleted_at) VALUES (?, ?, ?, ?, ?, NULL)")
+    .run("payment-2", propertyId, "booking-1", 500, "pending");
+
+  const reservations = await readReservations(database, propertyId);
+
+  assert.equal(reservations.length, 1);
+  assert.equal(reservations[0].guest.name, "Guest One");
+  assert.equal(reservations[0].paidKobo, 2500);
+  database.close();
 });
 
 test("dashboard routes resolve to the app shell instead of 404ing", async () => {

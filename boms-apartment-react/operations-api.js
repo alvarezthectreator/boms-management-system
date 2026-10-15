@@ -66,7 +66,7 @@ function mapMovement(row) {
   return {
     id: row.id,
     itemId: row.item_id,
-    type: row.type,
+    type: row.type || row.title || "Maintenance",
     quantity: row.qty,
     reason: row.reason,
     date: row.created_at?.slice(0, 10),
@@ -81,7 +81,7 @@ function mapTask(row) {
     bookingId: row.booking_id || "",
     type: row.type,
     status: row.status,
-    priority: row.priority[0].toUpperCase() + row.priority.slice(1),
+    priority: String(row.priority || "medium").replace(/^./, (letter) => letter.toUpperCase()),
     assignedTo: row.assigned_to_name || row.assigned_to_label || "Unassigned",
     updatedAt: row.updated_at,
     startedAt: row.started_at,

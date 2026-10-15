@@ -60,9 +60,27 @@ if (postgresMode) {
   database.exec(fs.readFileSync(path.join(root, "db", "009_idempotency.sql"), "utf8"));
   database.exec(fs.readFileSync(path.join(root, "db", "010_audit_append_only.sql"), "utf8"));
   database.exec(fs.readFileSync(path.join(root, "db", "011_restock_requests.sql"), "utf8"));
+  const housekeepingColumns = new Set(database.pragma("table_info(housekeeping_tasks)").map((column) => column.name));
+  const missingHousekeepingColumns = {
+    unit_id: "TEXT",
+    booking_id: "TEXT",
+    type: "TEXT",
+    priority: "TEXT NOT NULL DEFAULT 'medium'",
+    assigned_to: "TEXT",
+    started_at: "TEXT",
+    finished_at: "TEXT",
+    inspected_by: "TEXT",
+    inspection_note: "TEXT",
+  };
+  for (const [column, definition] of Object.entries(missingHousekeepingColumns)) {
+    if (!housekeepingColumns.has(column)) {
+      database.exec(`ALTER TABLE housekeeping_tasks ADD COLUMN ${column} ${definition}`);
+    }
+  }
 }
 if (postgresMode) {
   await database.query(fs.readFileSync(path.join(root, "db", "011_restock_requests_postgres.sql"), "utf8"));
+  await database.query(fs.readFileSync(path.join(root, "db", "012_housekeeping_tasks_postgres.sql"), "utf8"));
 }
 
 const app = express();
@@ -416,19 +434,22 @@ app.post("/api/rooms/:id/blocks", async (request, response) => {
   }
 });
 
-app.get("/api/reservations", async (_request, response) => {
+export async function readReservations(database, propertyId) {
   const reservationRows = await database.all(`
     SELECT bookings.*, guests.full_name, guests.phone, guests.email, guests.nationality,
           guests.id_number, guests.loyalty_tier, guests.points,
-          COALESCE(sum(CASE WHEN payments.status IN ('paid', 'refunded', 'part_refunded') THEN payments.amount_kobo ELSE 0 END), 0) AS paid_kobo
+          COALESCE(payment_totals.paid_kobo, 0) AS paid_kobo
     FROM bookings
     JOIN guests ON guests.id = bookings.guest_id
-        LEFT JOIN payments ON payments.booking_id = bookings.id AND payments.deleted_at IS NULL
+    LEFT JOIN (
+      SELECT booking_id,
+             SUM(CASE WHEN status IN ('paid', 'refunded', 'part_refunded') THEN amount_kobo ELSE 0 END) AS paid_kobo
+      FROM payments WHERE deleted_at IS NULL GROUP BY booking_id
+    ) AS payment_totals ON payment_totals.booking_id = bookings.id
     WHERE bookings.property_id = ? AND bookings.deleted_at IS NULL
-        GROUP BY bookings.id
     ORDER BY bookings.created_at DESC
   `, [propertyId]);
-  const reservations = reservationRows.map((booking) => ({
+  return reservationRows.map((booking) => ({
     id: booking.id,
     guestId: booking.guest_id,
     guest: {
@@ -457,7 +478,10 @@ app.get("/api/reservations", async (_request, response) => {
     serviceKobo: Number(booking.service_kobo || 0),
     vatKobo: Number(booking.vat_kobo || 0),
   }));
-  response.json(reservations);
+}
+
+app.get("/api/reservations", async (_request, response) => {
+  response.json(await readReservations(database, propertyId));
 });
 
 app.patch("/api/reservations/:id/status", async (request, response) => {
