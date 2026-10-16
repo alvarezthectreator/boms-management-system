@@ -5,9 +5,22 @@ export function createTestDatabase() {
   database.exec(`
     CREATE TABLE properties (id TEXT PRIMARY KEY);
     INSERT INTO properties VALUES ('property_boms');
+    CREATE TABLE property_locations (
+      id TEXT PRIMARY KEY, property_id TEXT, name TEXT, kind TEXT,
+      has_kitchen INTEGER DEFAULT 0, active INTEGER DEFAULT 1, sort_order INTEGER DEFAULT 0
+    );
+    INSERT INTO property_locations VALUES
+      ('location-building-1', 'property_boms', 'Building 1', 'accommodation', 0, 1, 1),
+      ('location-building-2', 'property_boms', 'Building 2', 'accommodation', 1, 1, 2),
+      ('location-bar', 'property_boms', 'Bar & Lounge', 'bar', 0, 1, 3);
     CREATE TABLE users (
       id TEXT PRIMARY KEY, property_id TEXT, name TEXT, email TEXT, role TEXT,
-      active INTEGER DEFAULT 1, password_hash TEXT, last_login TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT
+      active INTEGER DEFAULT 1, password_hash TEXT, last_login TEXT, last_seen_at TEXT,
+      location_id TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT
+    );
+    CREATE TABLE staff_messages (
+      id TEXT PRIMARY KEY, property_id TEXT, sender_id TEXT, recipient_id TEXT,
+      body TEXT, read_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE auth_sessions (
       id TEXT PRIMARY KEY, property_id TEXT, user_id TEXT, token_hash TEXT UNIQUE,
@@ -66,7 +79,7 @@ export function createTestDatabase() {
       deleted_at TEXT
     );
     CREATE TABLE units (
-      id TEXT PRIMARY KEY, property_id TEXT, number TEXT, room_type_id TEXT, deleted_at TEXT
+      id TEXT PRIMARY KEY, property_id TEXT, number TEXT, room_type_id TEXT, location_id TEXT, deleted_at TEXT
     );
     CREATE TABLE out_of_order_blocks (
       id TEXT PRIMARY KEY, property_id TEXT, unit_id TEXT, start_date TEXT,
@@ -96,7 +109,7 @@ export function createTestDatabase() {
     CREATE TABLE inventory_items (
       id TEXT PRIMARY KEY, property_id TEXT, name TEXT, category TEXT, unit TEXT,
       qty REAL DEFAULT 0, min_qty REAL DEFAULT 0, cost_kobo INTEGER DEFAULT 0,
-      supplier_id TEXT, deleted_at TEXT, updated_at TEXT
+      supplier_id TEXT, location_id TEXT, deleted_at TEXT, updated_at TEXT
     );
     CREATE TABLE inventory_batches (
       id TEXT PRIMARY KEY, property_id TEXT, item_id TEXT, batch_code TEXT,
@@ -106,14 +119,15 @@ export function createTestDatabase() {
     );
     CREATE TABLE stock_movements (
       id TEXT PRIMARY KEY, property_id TEXT, item_id TEXT, type TEXT, qty REAL,
-      reason TEXT, ref TEXT, created_at TEXT, updated_at TEXT
+      reason TEXT, ref TEXT, location_id TEXT, created_at TEXT, updated_at TEXT
     );
     CREATE TABLE menu_categories (
-      id TEXT PRIMARY KEY, property_id TEXT, name TEXT, station TEXT, active INTEGER DEFAULT 1
+      id TEXT PRIMARY KEY, property_id TEXT, name TEXT, station TEXT, active INTEGER DEFAULT 1,
+      created_at TEXT, updated_at TEXT
     );
     CREATE TABLE menu_items (
       id TEXT PRIMARY KEY, property_id TEXT, category_id TEXT, name TEXT, description TEXT,
-      price_kobo INTEGER, station TEXT, available INTEGER DEFAULT 1,
+      image_url TEXT, fulfillment_location_id TEXT, price_kobo INTEGER, station TEXT, available INTEGER DEFAULT 1,
       created_at TEXT, updated_at TEXT, deleted_at TEXT
     );
     CREATE TABLE menu_recipe_lines (
@@ -127,20 +141,21 @@ export function createTestDatabase() {
     CREATE TABLE fnb_orders (
       id TEXT PRIMARY KEY, property_id TEXT, order_number TEXT, status TEXT, source TEXT,
       room_unit_id TEXT, booking_id TEXT, guest_name TEXT, payment_method TEXT,
+      service_mode TEXT DEFAULT 'lounge', origin_location_id TEXT,
       subtotal_kobo INTEGER, discount_kobo INTEGER, tax_kobo INTEGER, service_kobo INTEGER,
-      total_kobo INTEGER, notes TEXT, created_by_label TEXT, billed_at TEXT,
+      total_kobo INTEGER, notes TEXT, created_by_label TEXT, created_by TEXT, billed_at TEXT,
       created_at TEXT, updated_at TEXT, deleted_at TEXT
     );
     CREATE TABLE fnb_order_items (
       id TEXT PRIMARY KEY, property_id TEXT, order_id TEXT, menu_item_id TEXT,
-      item_name TEXT, station TEXT, qty INTEGER, unit_price_kobo INTEGER,
+      item_name TEXT, station TEXT, fulfillment_location_id TEXT, qty INTEGER, unit_price_kobo INTEGER,
       modifiers_json TEXT, recipe_snapshot_json TEXT, stock_posted INTEGER DEFAULT 0,
       item_status TEXT DEFAULT 'new', created_at TEXT, updated_at TEXT, deleted_at TEXT
     );
     CREATE TABLE fnb_order_payments (
       id TEXT PRIMARY KEY, property_id TEXT, order_id TEXT, method TEXT, amount_kobo INTEGER,
       status TEXT, original_payment_id TEXT, reference TEXT, reason TEXT,
-      created_at TEXT, updated_at TEXT
+      created_at TEXT, updated_at TEXT, created_by TEXT
     );
     CREATE TABLE minibar_movements (
       id TEXT PRIMARY KEY, property_id TEXT, unit_id TEXT, booking_id TEXT, item_id TEXT,
@@ -231,6 +246,7 @@ export function createRouteApp() {
           id: headers["x-test-user-id"] || `test-${headers["x-test-role"] || "worker"}`,
           name: headers["x-test-user-name"] || "Test User",
           role: headers["x-test-role"] || "worker",
+          location_id: headers["x-test-user-location"] || (headers["x-test-role"] === "manager" || headers["x-test-role"] === "ceo" ? "" : "location-bar"),
         },
         params: Object.fromEntries(names.map((name, index) => [name, decodeURIComponent(match[index + 1])])),
         get(name) { return headers[name.toLowerCase()] || headers[name] || undefined; },
@@ -243,17 +259,17 @@ export function createRouteApp() {
 }
 
 export function seedFnb(database, { withBooking = false } = {}) {
-  database.prepare("INSERT INTO inventory_items (id, property_id, name, category, unit, qty, min_qty, cost_kobo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-    .run("stock-rice", "property_boms", "Rice", "Food", "kg", 5, 1, 100);
+  database.prepare("INSERT INTO inventory_items (id, property_id, name, category, unit, qty, min_qty, cost_kobo, location_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run("stock-rice", "property_boms", "Rice", "Food", "kg", 5, 1, 100, "location-building-2");
   database.prepare("INSERT INTO menu_categories (id, property_id, name, station, active) VALUES (?, ?, ?, ?, 1)")
     .run("cat-food", "property_boms", "Food", "kitchen");
-  database.prepare("INSERT INTO menu_items (id, property_id, category_id, name, description, price_kobo, station, available, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
-    .run("menu-rice", "property_boms", "cat-food", "Rice plate", "", 1000, "kitchen");
+  database.prepare("INSERT INTO menu_items (id, property_id, category_id, name, description, fulfillment_location_id, price_kobo, station, available, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+    .run("menu-rice", "property_boms", "cat-food", "Rice plate", "", "location-building-2", 1000, "kitchen");
   database.prepare("INSERT INTO menu_recipe_lines (id, property_id, menu_item_id, inventory_item_id, qty, unit) VALUES (?, ?, ?, ?, ?, ?)")
     .run("recipe-rice", "property_boms", "menu-rice", "stock-rice", 0.5, "kg");
   if (withBooking) {
     database.prepare("INSERT INTO guests (id, property_id, full_name) VALUES (?, ?, ?)").run("guest-1", "property_boms", "Guest One");
-    database.prepare("INSERT INTO units (id, property_id, number) VALUES (?, ?, ?)").run("unit-1", "property_boms", "101");
+    database.prepare("INSERT INTO units (id, property_id, number, location_id) VALUES (?, ?, ?, ?)").run("unit-1", "property_boms", "101", "location-building-1");
     database.prepare("INSERT INTO bookings (id, property_id, guest_id, unit_id, status, subtotal_kobo, total_kobo) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run("booking-1", "property_boms", "guest-1", "unit-1", "checked_in", 5000, 5000);
     database.prepare("INSERT INTO invoices (id, property_id, booking_id, total_kobo, paid_kobo, status) VALUES (?, ?, ?, ?, ?, ?)")

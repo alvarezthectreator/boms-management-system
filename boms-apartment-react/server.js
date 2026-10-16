@@ -60,6 +60,42 @@ if (postgresMode) {
   database.exec(fs.readFileSync(path.join(root, "db", "009_idempotency.sql"), "utf8"));
   database.exec(fs.readFileSync(path.join(root, "db", "010_audit_append_only.sql"), "utf8"));
   database.exec(fs.readFileSync(path.join(root, "db", "011_restock_requests.sql"), "utf8"));
+  database.exec(fs.readFileSync(path.join(root, "db", "015_staff_messaging.sql"), "utf8"));
+  database.exec(fs.readFileSync(path.join(root, "db", "019_location_workflow.sql"), "utf8"));
+  if (!database.pragma("table_info(users)").some((column) => column.name === "last_seen_at")) {
+    database.exec("ALTER TABLE users ADD COLUMN last_seen_at TEXT");
+  }
+  if (!database.pragma("table_info(menu_items)").some((column) => column.name === "image_url")) {
+    database.exec(fs.readFileSync(path.join(root, "db", "016_menu_item_images.sql"), "utf8"));
+  }
+  const locationColumns = {
+    units: { location_id: "TEXT" },
+    users: { location_id: "TEXT" },
+    inventory_items: { location_id: "TEXT" },
+    stock_movements: { location_id: "TEXT" },
+    menu_items: { fulfillment_location_id: "TEXT" },
+    fnb_orders: { origin_location_id: "TEXT", service_mode: "TEXT NOT NULL DEFAULT 'lounge'" },
+    fnb_order_items: { fulfillment_location_id: "TEXT" },
+  };
+  for (const [table, columns] of Object.entries(locationColumns)) {
+    const existingColumns = new Set(database.pragma(`table_info(${table})`).map((column) => column.name));
+    for (const [column, definition] of Object.entries(columns)) {
+      if (!existingColumns.has(column)) database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
+  database.exec(`
+    UPDATE inventory_items SET location_id = 'location-building-2' WHERE location_id IS NULL;
+    UPDATE menu_items
+    SET fulfillment_location_id = CASE WHEN station = 'bar' THEN 'location-bar' ELSE 'location-building-2' END
+    WHERE fulfillment_location_id IS NULL;
+    UPDATE fnb_orders SET service_mode = CASE WHEN room_unit_id IS NULL THEN 'lounge' ELSE 'room' END,
+      origin_location_id = CASE WHEN room_unit_id IS NULL THEN 'location-bar'
+        ELSE (SELECT location_id FROM units WHERE units.id = fnb_orders.room_unit_id) END
+    WHERE origin_location_id IS NULL;
+    UPDATE fnb_order_items SET fulfillment_location_id = (
+      SELECT fulfillment_location_id FROM menu_items WHERE menu_items.id = fnb_order_items.menu_item_id
+    ) WHERE fulfillment_location_id IS NULL;
+  `);
   const housekeepingColumns = new Set(database.pragma("table_info(housekeeping_tasks)").map((column) => column.name));
   const missingHousekeepingColumns = {
     unit_id: "TEXT",
@@ -81,6 +117,11 @@ if (postgresMode) {
 if (postgresMode) {
   await database.query(fs.readFileSync(path.join(root, "db", "011_restock_requests_postgres.sql"), "utf8"));
   await database.query(fs.readFileSync(path.join(root, "db", "012_housekeeping_tasks_postgres.sql"), "utf8"));
+  await database.query(fs.readFileSync(path.join(root, "db", "013_unbooked_rooms_available_postgres.sql"), "utf8"));
+  await database.query(fs.readFileSync(path.join(root, "db", "014_postgres_api_compatibility.sql"), "utf8"));
+  await database.query(fs.readFileSync(path.join(root, "db", "015_staff_messaging_postgres.sql"), "utf8"));
+  await database.query(fs.readFileSync(path.join(root, "db", "016_menu_item_images_postgres.sql"), "utf8"));
+  await database.query(fs.readFileSync(path.join(root, "db", "019_location_workflow_postgres.sql"), "utf8"));
 }
 
 const app = express();
@@ -132,6 +173,8 @@ async function listRooms() {
       units.number,
       units.floor,
       units.status,
+      units.location_id,
+      property_locations.name AS location_name,
       room_types.id AS room_type_id,
       room_types.name AS room_type_name,
       room_types.size_m2,
@@ -142,6 +185,7 @@ async function listRooms() {
       room_types.photos_json
     FROM units
     JOIN room_types ON room_types.id = units.room_type_id
+    LEFT JOIN property_locations ON property_locations.id = units.location_id
     WHERE units.property_id = ?
       AND units.deleted_at IS NULL
       AND room_types.deleted_at IS NULL
@@ -174,6 +218,8 @@ async function listRooms() {
     number: room.number,
     floor: room.floor || null,
     status: room.status,
+    locationId: room.location_id || "",
+    locationName: room.location_name || "Unassigned",
     roomTypeId: room.room_type_id,
     roomTypeName: room.room_type_name,
     sizeM2: room.size_m2,
@@ -198,7 +244,7 @@ function roomImages(value) {
 
 async function getRoom(id, connection = database) {
   return connection.get(`
-    SELECT units.id, units.number, units.status, units.room_type_id,
+    SELECT units.id, units.number, units.status, units.room_type_id, units.location_id,
            room_types.base_rate_kobo, room_types.max_guests
     FROM units
     JOIN room_types ON room_types.id = units.room_type_id
@@ -215,6 +261,8 @@ async function updateRoomDetails(request, id) {
   const image = parseImage(request.body);
   const floor = request.body.floor === "" || request.body.floor == null ? null : Number(request.body.floor);
   if (floor !== null && (!Number.isInteger(floor) || floor < 0)) throw Object.assign(new Error("Enter a valid floor."), { status: 400 });
+  const location = await database.get("SELECT id FROM property_locations WHERE id = ? AND property_id = ? AND kind = 'accommodation' AND active = 1", [values.locationId, propertyId]);
+  if (!location) throw Object.assign(new Error("Choose Building 1 or Building 2 for this room."), { status: 400 });
   await database.withTransaction(async (transaction) => {
     await transaction.run(`
       UPDATE room_types SET name = ?, size_m2 = ?, bed_type = ?, max_guests = ?, description = ?, base_rate_kobo = ?, updated_at = CURRENT_TIMESTAMP
@@ -222,8 +270,8 @@ async function updateRoomDetails(request, id) {
       WHERE id = ? AND property_id = ?
     `, [...[values.name, values.sizeM2, values.bedType, values.maxGuests, values.description, values.rateKobo],
       ...(image ? [JSON.stringify([image])] : []), room.room_type_id, propertyId]);
-    await transaction.run(`UPDATE units SET name = ?, number = ?, floor = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?`,
-      [values.name, values.number, floor, room.id, propertyId]);
+    await transaction.run(`UPDATE units SET name = ?, number = ?, floor = ?, location_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?`,
+      [values.name, values.number, floor, values.locationId, room.id, propertyId]);
   });
   const updated = (await listRooms()).find((item) => item.id === room.id);
   await writeAudit(request, "room", room.id, "updated", before, updated);
@@ -262,7 +310,7 @@ function cleanRoomValues(body) {
   if (!Number.isFinite(sizeM2) || sizeM2 < 0 || sizeM2 > 10000) throw Object.assign(new Error("Enter a valid room size."), { status: 400 });
   const bedType = String(body.bedType || "").trim();
   if (!bedType) throw Object.assign(new Error("Enter the bed type."), { status: 400 });
-  return { name, number, rateKobo: Math.round(rateNaira * 100), maxGuests, sizeM2, bedType, description: String(body.description || "").trim() };
+  return { name, number, locationId: String(body.locationId || "").trim(), rateKobo: Math.round(rateNaira * 100), maxGuests, sizeM2, bedType, description: String(body.description || "").trim() };
 }
 
 function sendError(response, error) {
@@ -295,6 +343,8 @@ app.post("/api/rooms", async (request, response) => {
     }
     if (request.user.role !== "ceo") return response.status(403).json({ error: "Only an admin can create rooms." });
     const values = cleanRoomValues(request.body);
+    const location = await database.get("SELECT id FROM property_locations WHERE id = ? AND property_id = ? AND kind = 'accommodation' AND active = 1", [values.locationId, propertyId]);
+    if (!location) return response.status(400).json({ error: "Choose Building 1 or Building 2 for this room." });
     const image = parseImage(request.body);
     const idSuffix = crypto.randomUUID();
     const roomTypeId = `RT-${idSuffix}`;
@@ -308,9 +358,9 @@ app.post("/api/rooms", async (request, response) => {
       `, [roomTypeId, propertyId, values.name, values.sizeM2, values.bedType, values.maxGuests, values.description,
         values.rateKobo, JSON.stringify(image ? [image] : [])]);
       await transaction.run(`
-        INSERT INTO units (id, property_id, name, number, floor, room_type_id, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'available', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `, [unitId, propertyId, values.name, values.number, floor, roomTypeId]);
+        INSERT INTO units (id, property_id, name, number, floor, room_type_id, location_id, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'available', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [unitId, propertyId, values.name, values.number, floor, roomTypeId, values.locationId]);
     });
     const room = (await listRooms()).find((item) => item.id === unitId);
     await writeAudit(request, "room", unitId, "created", null, room);

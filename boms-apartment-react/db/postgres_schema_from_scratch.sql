@@ -6,6 +6,7 @@ BEGIN;
 
 DROP TABLE IF EXISTS daily_closings CASCADE;
 DROP TABLE IF EXISTS concierge_requests CASCADE;
+DROP TABLE IF EXISTS staff_messages CASCADE;
 DROP TABLE IF EXISTS reviews CASCADE;
 DROP TABLE IF EXISTS messages CASCADE;
 DROP TABLE IF EXISTS conversations CASCADE;
@@ -52,6 +53,19 @@ CREATE TABLE properties (
   deleted_at TIMESTAMPTZ
 );
 
+CREATE TABLE property_locations (
+  id TEXT PRIMARY KEY,
+  property_id TEXT NOT NULL REFERENCES properties(id),
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('accommodation', 'bar')),
+  has_kitchen INTEGER NOT NULL DEFAULT 0 CHECK (has_kitchen IN (0, 1)),
+  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (property_id, name)
+);
+
 CREATE TABLE room_types (
   id TEXT PRIMARY KEY,
   property_id TEXT NOT NULL REFERENCES properties(id),
@@ -76,6 +90,8 @@ CREATE TABLE users (
   active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
   password_hash TEXT,
   last_login TIMESTAMPTZ,
+  last_seen_at TIMESTAMPTZ,
+  location_id TEXT REFERENCES property_locations(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ
@@ -204,6 +220,9 @@ CREATE TABLE guests (
   email TEXT,
   phone TEXT,
   nationality TEXT,
+  id_number TEXT,
+  loyalty_tier TEXT NOT NULL DEFAULT 'Silver',
+  points INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ
@@ -216,6 +235,7 @@ CREATE TABLE units (
   number TEXT,
   floor INTEGER,
   room_type_id TEXT REFERENCES room_types(id),
+  location_id TEXT REFERENCES property_locations(id),
   status TEXT NOT NULL DEFAULT 'available',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -239,10 +259,15 @@ CREATE TABLE bookings (
   property_id TEXT NOT NULL REFERENCES properties(id),
   guest_id TEXT REFERENCES guests(id),
   unit_id TEXT REFERENCES units(id),
+  room_type_id TEXT REFERENCES room_types(id),
   status TEXT,
   check_in DATE,
   check_out DATE,
   nights INTEGER NOT NULL DEFAULT 0,
+  adults INTEGER NOT NULL DEFAULT 1,
+  children INTEGER NOT NULL DEFAULT 0,
+  source TEXT,
+  requests TEXT,
   rate_kobo INTEGER NOT NULL DEFAULT 0,
   subtotal_kobo INTEGER NOT NULL DEFAULT 0,
   discount_kobo INTEGER NOT NULL DEFAULT 0,
@@ -258,6 +283,9 @@ CREATE TABLE invoices (
   id TEXT PRIMARY KEY,
   property_id TEXT NOT NULL REFERENCES properties(id),
   booking_id TEXT REFERENCES bookings(id),
+  number TEXT,
+  issue_date DATE,
+  due_date DATE,
   total_kobo INTEGER,
   paid_kobo INTEGER NOT NULL DEFAULT 0,
   status TEXT,
@@ -304,6 +332,7 @@ CREATE TABLE inventory_items (
   min_qty REAL NOT NULL DEFAULT 0,
   cost_kobo INTEGER NOT NULL DEFAULT 0,
   supplier_id TEXT,
+  location_id TEXT REFERENCES property_locations(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ
@@ -334,8 +363,10 @@ CREATE TABLE stock_movements (
   qty REAL,
   reason TEXT,
   ref TEXT,
+  location_id TEXT REFERENCES property_locations(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
 );
 
 CREATE TABLE menu_categories (
@@ -357,6 +388,8 @@ CREATE TABLE menu_items (
   category_id TEXT NOT NULL REFERENCES menu_categories(id),
   name TEXT NOT NULL,
   description TEXT,
+  image_url TEXT,
+  fulfillment_location_id TEXT REFERENCES property_locations(id),
   price_kobo INTEGER NOT NULL CHECK (price_kobo >= 0),
   station TEXT NOT NULL CHECK (station IN ('kitchen', 'bar')),
   available INTEGER NOT NULL DEFAULT 1 CHECK (available IN (0, 1)),
@@ -399,6 +432,8 @@ CREATE TABLE fnb_orders (
   order_number TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('new', 'accepted', 'preparing', 'ready', 'served', 'billed', 'cancelled')),
   source TEXT NOT NULL CHECK (source IN ('room_service', 'restaurant', 'bar', 'counter', 'poolside')),
+  service_mode TEXT NOT NULL DEFAULT 'lounge' CHECK (service_mode IN ('room', 'lounge')),
+  origin_location_id TEXT REFERENCES property_locations(id),
   room_unit_id TEXT REFERENCES units(id),
   booking_id TEXT REFERENCES bookings(id),
   guest_name TEXT,
@@ -425,6 +460,7 @@ CREATE TABLE fnb_order_items (
   menu_item_id TEXT NOT NULL REFERENCES menu_items(id),
   item_name TEXT NOT NULL,
   station TEXT NOT NULL CHECK (station IN ('kitchen', 'bar')),
+  fulfillment_location_id TEXT REFERENCES property_locations(id),
   qty INTEGER NOT NULL CHECK (qty > 0),
   unit_price_kobo INTEGER NOT NULL CHECK (unit_price_kobo >= 0),
   modifiers_json JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -491,6 +527,16 @@ CREATE TABLE messages (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ
+);
+
+CREATE TABLE staff_messages (
+  id TEXT PRIMARY KEY,
+  property_id TEXT NOT NULL REFERENCES properties(id),
+  sender_id TEXT NOT NULL REFERENCES users(id),
+  recipient_id TEXT NOT NULL REFERENCES users(id),
+  body TEXT NOT NULL,
+  read_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE reviews (
@@ -588,6 +634,7 @@ CREATE TABLE expenses (
 );
 
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_expiry ON auth_sessions(user_id, expires_at);
+CREATE INDEX IF NOT EXISTS idx_staff_messages_thread ON staff_messages(property_id, sender_id, recipient_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_restock_requests_property_status ON restock_requests(property_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_api_idempotency_created_at ON api_idempotency_keys(created_at);
 CREATE INDEX IF NOT EXISTS idx_inventory_batches_expiry ON inventory_batches(property_id, item_id, expiry_date, remaining_qty);
@@ -768,6 +815,17 @@ EXECUTE FUNCTION set_updated_at();
 
 INSERT INTO properties (id, name) VALUES ('property_boms', 'BOMS')
 ON CONFLICT (id) DO NOTHING;
+
+UPDATE inventory_items SET location_id = 'location-building-2' WHERE location_id IS NULL;
+
+INSERT INTO property_locations (id, property_id, name, kind, has_kitchen, active, sort_order)
+VALUES
+  ('location-building-1', 'property_boms', 'Building 1', 'accommodation', 0, 1, 1),
+  ('location-building-2', 'property_boms', 'Building 2', 'accommodation', 1, 1, 2),
+  ('location-bar', 'property_boms', 'Bar & Lounge', 'bar', 0, 1, 3)
+ON CONFLICT (id) DO NOTHING;
+
+UPDATE inventory_items SET location_id = 'location-building-2' WHERE location_id IS NULL;
 
 WITH room_names(name, slug) AS (
   VALUES

@@ -38,9 +38,21 @@ async function audit(database, propertyId, request, entity, entityId, action, be
 
 async function readWorkspace(database, propertyId, includeAuditLogs = false) {
   const users = (await database.all(`
-    SELECT id, name, email, role, active FROM users
-    WHERE property_id = ? AND deleted_at IS NULL ORDER BY name
-  `, [propertyId])).map((user) => ({ ...user, active: Boolean(user.active) }));
+    SELECT users.id, users.name, users.email, users.role, users.active, users.last_seen_at,
+           users.location_id, property_locations.name AS location_name
+    FROM users LEFT JOIN property_locations ON property_locations.id = users.location_id
+      AND property_locations.property_id = users.property_id
+    WHERE users.property_id = ? AND users.deleted_at IS NULL ORDER BY users.name
+  `, [propertyId])).map((user) => ({
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    locationId: user.location_id || "",
+    locationName: user.location_name || "Unassigned",
+    active: Boolean(user.active),
+    online: Boolean(user.active && user.last_seen_at && new Date(user.last_seen_at).getTime() > Date.now() - 90_000),
+  }));
   const conversationRows = await database.all(`
     SELECT conversations.*, guests.full_name
     FROM conversations JOIN guests ON guests.id = conversations.guest_id
@@ -223,6 +235,77 @@ export function registerWorkspaceRoutes(app, database, propertyId) {
 
   app.get("/api/workspace", async (request, response) => response.json(await readWorkspace(database, propertyId, ["manager", "ceo"].includes(request.user?.role))));
 
+  app.post("/api/presence", async (request, response) => {
+    const timestamp = new Date().toISOString();
+    await database.run(`
+      UPDATE users SET last_seen_at = ?
+      WHERE id = ? AND property_id = ? AND active = 1 AND deleted_at IS NULL
+    `, [timestamp, request.user.id, propertyId]);
+    const users = await database.all(`
+      SELECT id, last_seen_at FROM users
+      WHERE property_id = ? AND active = 1 AND deleted_at IS NULL
+    `, [propertyId]);
+    const cutoff = Date.now() - 90_000;
+    response.json({ onlineUserIds: users.filter((user) => user.last_seen_at && new Date(user.last_seen_at).getTime() > cutoff).map((user) => user.id) });
+  });
+
+  async function getMessagePeer(request, response) {
+    const peer = await database.get(`
+      SELECT id, name, role FROM users
+      WHERE id = ? AND property_id = ? AND active = 1 AND deleted_at IS NULL
+    `, [request.params.userId, propertyId]);
+    const allowedPeer = peer && peer.id !== request.user.id && (
+      request.user.role === "worker"
+        ? managerRoles.includes(peer.role)
+        : ["worker", ...managerRoles].includes(peer.role)
+    );
+    if (!allowedPeer) {
+      response.status(404).json({ error: "Team member not found." });
+      return null;
+    }
+    return peer;
+  }
+
+  app.get("/api/staff-messages/:userId", async (request, response) => {
+    if (!requireRole(request, response, ["worker", ...managerRoles])) return;
+    const peer = await getMessagePeer(request, response);
+    if (!peer) return;
+    const timestamp = new Date().toISOString();
+    await database.run(`
+      UPDATE staff_messages SET read_at = ?
+      WHERE property_id = ? AND sender_id = ? AND recipient_id = ? AND read_at IS NULL
+    `, [timestamp, propertyId, peer.id, request.user.id]);
+    const messages = await database.all(`
+      SELECT id, sender_id, recipient_id, body, read_at, created_at
+      FROM staff_messages
+      WHERE property_id = ?
+        AND ((sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?))
+      ORDER BY created_at, id
+    `, [propertyId, request.user.id, peer.id, peer.id, request.user.id]);
+    response.json(messages.map((message) => ({
+      id: message.id,
+      senderId: message.sender_id,
+      recipientId: message.recipient_id,
+      text: message.body,
+      readAt: message.read_at,
+      createdAt: message.created_at,
+    })));
+  });
+
+  app.post("/api/staff-messages/:userId", async (request, response) => {
+    if (!requireRole(request, response, ["worker", ...managerRoles])) return;
+    const peer = await getMessagePeer(request, response);
+    if (!peer) return;
+    const body = String(request.body.body || "").trim();
+    if (!body || body.length > 4000) return response.status(400).json({ error: "Enter a message up to 4,000 characters." });
+    const id = `STAFF-MSG-${crypto.randomUUID()}`;
+    await database.run(`
+      INSERT INTO staff_messages (id, property_id, sender_id, recipient_id, body, created_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `, [id, propertyId, request.user.id, peer.id, body]);
+    response.status(201).json({ id, senderId: request.user.id, recipientId: peer.id, text: body, readAt: null, createdAt: new Date().toISOString() });
+  });
+
   app.post("/api/conversations/:id/messages", async (request, response) => {
     if (!requireRole(request, response, ["worker", ...managerRoles])) return;
     const body = String(request.body.body || "").trim();
@@ -348,23 +431,68 @@ export function registerWorkspaceRoutes(app, database, propertyId) {
     const email = String(request.body.email || "").trim().toLowerCase();
     const role = request.body.role;
     const password = String(request.body.password || "");
+    const locationId = String(request.body.locationId || "").trim();
     if (request.user.role === "manager" && role !== "worker") {
       return response.status(403).json({ error: "Managers can create worker accounts only." });
     }
     if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !["worker", "manager", "ceo"].includes(role) || password.length < 12) {
       return response.status(400).json({ error: "Enter a name, valid email, role, and password of at least 12 characters." });
     }
+    if (role === "worker" && !await database.get("SELECT id FROM property_locations WHERE id = ? AND property_id = ? AND active = 1", [locationId, propertyId])) {
+      return response.status(400).json({ error: "Choose the worker's assigned building or outlet." });
+    }
     const id = `USR-${crypto.randomUUID()}`;
     try {
-      await database.run("INSERT INTO users (id, property_id, name, email, role, password_hash, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-        [id, propertyId, name, email, role, hashPassword(password)]);
-      const saved = { id, name, email, role, active: true };
+      await database.run("INSERT INTO users (id, property_id, name, email, role, location_id, password_hash, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        [id, propertyId, name, email, role, locationId || null, hashPassword(password)]);
+      const location = locationId ? await database.get("SELECT name FROM property_locations WHERE id = ? AND property_id = ?", [locationId, propertyId]) : null;
+      const saved = { id, name, email, role, locationId, locationName: location?.name || "Unassigned", active: true };
       await audit(database, propertyId, request, "user", id, "created", null, saved);
       response.status(201).json(saved);
     } catch (error) {
       if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return response.status(409).json({ error: "A team member already uses that email." });
       sendError(response, error);
     }
+  });
+
+  app.put("/api/users/:id", async (request, response) => {
+    if (!requireRole(request, response, managerRoles)) return;
+    const old = await database.get(`
+      SELECT id, name, email, role, active, location_id FROM users
+      WHERE id = ? AND property_id = ? AND deleted_at IS NULL
+    `, [request.params.id, propertyId]);
+    if (!old || old.role !== "worker") return response.status(404).json({ error: "Worker not found." });
+    const name = String(request.body.name || "").trim();
+    const email = String(request.body.email || "").trim().toLowerCase();
+    const locationId = String(request.body.locationId || "").trim();
+    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return response.status(400).json({ error: "Enter a name and valid email address." });
+    }
+    const location = await database.get("SELECT id, name FROM property_locations WHERE id = ? AND property_id = ? AND active = 1", [locationId, propertyId]);
+    if (!location) return response.status(400).json({ error: "Choose the worker's assigned building or outlet." });
+    try {
+      await database.run("UPDATE users SET name = ?, email = ?, location_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?", [name, email, locationId, old.id, propertyId]);
+    } catch (error) {
+      if (["SQLITE_CONSTRAINT_UNIQUE", "23505"].includes(error.code)) return response.status(409).json({ error: "A team member already uses that email." });
+      throw error;
+    }
+    const updated = { ...old, name, email, locationId, locationName: location.name, active: Boolean(old.active) };
+    await audit(database, propertyId, request, "user", old.id, "updated", old, updated);
+    response.json(updated);
+  });
+
+  app.delete("/api/users/:id", async (request, response) => {
+    if (!requireRole(request, response, managerRoles)) return;
+    const old = await database.get(`
+      SELECT id, name, email, role, active FROM users
+      WHERE id = ? AND property_id = ? AND deleted_at IS NULL
+    `, [request.params.id, propertyId]);
+    if (!old || old.role !== "worker") return response.status(404).json({ error: "Worker not found." });
+    const timestamp = new Date().toISOString();
+    await database.run("UPDATE users SET active = 0, deleted_at = ?, updated_at = ? WHERE id = ? AND property_id = ?", [timestamp, timestamp, old.id, propertyId]);
+    await database.run("DELETE FROM auth_sessions WHERE user_id = ? AND property_id = ?", [old.id, propertyId]);
+    await audit(database, propertyId, request, "user", old.id, "deleted", old, { ...old, active: false });
+    response.json({ id: old.id, deleted: true });
   });
 
   app.patch("/api/users/:id/active", async (request, response) => {

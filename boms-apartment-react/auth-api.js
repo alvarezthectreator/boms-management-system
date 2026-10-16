@@ -32,9 +32,11 @@ function hashToken(token) {
 async function findSessionUser(database, propertyId, token) {
   if (!token) return null;
   return database.get(`
-    SELECT users.id, users.name, users.email, users.role
+        SELECT users.id, users.name, users.email, users.role, users.location_id,
+          property_locations.name AS location_name
     FROM auth_sessions
     JOIN users ON users.id = auth_sessions.user_id AND users.property_id = auth_sessions.property_id
+        LEFT JOIN property_locations ON property_locations.id = users.location_id AND property_locations.property_id = users.property_id
     WHERE auth_sessions.property_id = ? AND auth_sessions.token_hash = ?
       AND auth_sessions.expires_at > CURRENT_TIMESTAMP AND users.active = 1 AND users.deleted_at IS NULL
   `, [propertyId, hashToken(token)]) || null;
@@ -91,10 +93,10 @@ export function registerAuthRoutes(app, database, propertyId) {
     const expiresAt = new Date(now + sessionDurationMs).toISOString().replace("T", " ").slice(0, 19);
     await database.run("INSERT INTO auth_sessions (id, property_id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
       [`SES-${crypto.randomUUID()}`, propertyId, user.id, hashToken(token), new Date(now).toISOString(), expiresAt]);
-    await database.run("UPDATE users SET last_login = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [user.id]);
+    await database.run("UPDATE users SET last_login = CURRENT_TIMESTAMP, last_seen_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [user.id]);
     await applyRoleFiltering(database, propertyId, user);
     setSessionCookie(response, request, token, Math.floor(sessionDurationMs / 1000));
-    response.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+    response.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role, locationId: user.location_id || "", locationName: user.location_name || "" } });
   });
 
   app.get("/api/auth/me", async (request, response) => {
@@ -106,7 +108,11 @@ export function registerAuthRoutes(app, database, propertyId) {
 
   app.post("/api/auth/logout", async (request, response) => {
     const token = readCookie(request, sessionCookie);
-    if (token) await database.run("DELETE FROM auth_sessions WHERE property_id = ? AND token_hash = ?", [propertyId, hashToken(token)]);
+    if (token) {
+      const session = await database.get("SELECT user_id FROM auth_sessions WHERE property_id = ? AND token_hash = ?", [propertyId, hashToken(token)]);
+      await database.run("DELETE FROM auth_sessions WHERE property_id = ? AND token_hash = ?", [propertyId, hashToken(token)]);
+      if (session) await database.run("UPDATE users SET last_seen_at = NULL WHERE id = ? AND property_id = ?", [session.user_id, propertyId]);
+    }
     setSessionCookie(response, request, "", 0);
     response.status(204).end();
   });

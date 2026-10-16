@@ -44,6 +44,8 @@ function mapInventory(row) {
     minimum: row.min_qty,
     costKobo: row.cost_kobo,
     supplierId: row.supplier_id || "",
+    locationId: row.location_id || "",
+    locationName: row.location_name || "Unassigned",
     databaseItem: true,
   };
 }
@@ -143,8 +145,10 @@ function mapInvoice(row) {
 
 async function readOperations(database, propertyId) {
   const inventory = (await database.all(`
-    SELECT * FROM inventory_items
-    WHERE property_id = ? AND deleted_at IS NULL ORDER BY name
+    SELECT inventory_items.*, property_locations.name AS location_name
+    FROM inventory_items
+    LEFT JOIN property_locations ON property_locations.id = inventory_items.location_id
+    WHERE inventory_items.property_id = ? AND inventory_items.deleted_at IS NULL ORDER BY inventory_items.name
   `, [propertyId])).map(mapInventory);
   const stockMovements = (await database.all(`
     SELECT * FROM stock_movements
@@ -877,21 +881,55 @@ export function registerOperationsRoutes(app, database, propertyId) {
     const quantity = Number(request.body.quantity || 0);
     const minimum = Number(request.body.minimum || 0);
     const costKobo = Math.round(Number(request.body.costKobo || 0));
+    const locationId = String(request.body.locationId || "");
     if (!String(name || "").trim() || !category || !String(unit || "").trim() || !Number.isFinite(quantity) || quantity < 0 || !Number.isFinite(minimum) || minimum < 0 || costKobo < 0) return response.status(400).json({ error: "Enter a valid item name, category, unit, quantity, and minimum." });
+    const location = await database.get("SELECT id FROM property_locations WHERE id = ? AND property_id = ? AND active = 1", [locationId, propertyId]);
+    if (!location) return response.status(400).json({ error: "Choose the stock location for this item." });
     const id = request.body.id || `IT-${crypto.randomUUID()}`;
     try {
       const item = await database.withTransaction(async (transaction) => {
         const supplier = request.body.supplierId ? await transaction.get("SELECT id FROM suppliers WHERE id = ? AND property_id = ? AND deleted_at IS NULL", [request.body.supplierId, propertyId]) : null;
         const supplierId = supplier?.id || null;
-        await transaction.run(`INSERT INTO inventory_items (id, property_id, name, category, unit, qty, min_qty, cost_kobo, supplier_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowSql}, ${nowSql})`,
-          [id, propertyId, String(name).trim(), category, String(unit).trim(), quantity, minimum, costKobo, supplierId]);
-        if (quantity > 0) await transaction.run(`INSERT INTO stock_movements (id, property_id, item_id, type, qty, reason, created_at, updated_at) VALUES (?, ?, ?, 'in', ?, 'Opening balance', ${nowSql}, ${nowSql})`,
-          [`OPEN-${id}`, propertyId, id, quantity]);
-        const savedItem = await transaction.get("SELECT * FROM inventory_items WHERE id = ?", [id]);
+        await transaction.run(`INSERT INTO inventory_items (id, property_id, name, category, unit, qty, min_qty, cost_kobo, supplier_id, location_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowSql}, ${nowSql})`,
+          [id, propertyId, String(name).trim(), category, String(unit).trim(), quantity, minimum, costKobo, supplierId, locationId]);
+        if (quantity > 0) await transaction.run(`INSERT INTO stock_movements (id, property_id, item_id, type, qty, reason, location_id, created_at, updated_at) VALUES (?, ?, ?, 'in', ?, 'Opening balance', ?, ${nowSql}, ${nowSql})`,
+          [`OPEN-${id}`, propertyId, id, quantity, locationId]);
+        const savedItem = await transaction.get(`SELECT inventory_items.*, property_locations.name AS location_name FROM inventory_items LEFT JOIN property_locations ON property_locations.id = inventory_items.location_id WHERE inventory_items.id = ?`, [id]);
         await writeAuditAsync(transaction, propertyId, request, "inventory_item", id, "created", null, savedItem);
         return mapInventory(savedItem);
       });
       response.status(201).json(item);
+    } catch (error) {
+      sendError(response, error);
+    }
+  });
+
+  app.patch("/api/inventory/:id/location", async (request, response) => {
+    if (!requireRole(request, response, managerRoles)) return;
+    const locationId = String(request.body.locationId || "");
+    const location = await database.get("SELECT id FROM property_locations WHERE id = ? AND property_id = ? AND active = 1", [locationId, propertyId]);
+    if (!location) return response.status(400).json({ error: "Choose a valid stock location." });
+    try {
+      const result = await database.withTransaction(async (transaction) => {
+        const old = await transaction.getForUpdate("SELECT * FROM inventory_items WHERE id = ? AND property_id = ? AND deleted_at IS NULL", [request.params.id, propertyId]);
+        if (!old) throw fail("Inventory item not found.", 404);
+        if (old.location_id === locationId) return { item: old, movements: [] };
+        const sourceLocation = await transaction.get("SELECT name FROM property_locations WHERE id = ? AND property_id = ?", [old.location_id, propertyId]);
+        const targetLocation = await transaction.get("SELECT name FROM property_locations WHERE id = ? AND property_id = ?", [locationId, propertyId]);
+        if (Number(old.qty) > 0 && old.location_id) {
+          const transferId = `TRANSFER-${crypto.randomUUID()}`;
+          for (const [type, location, other] of [["out", old.location_id, targetLocation.name], ["in", locationId, sourceLocation?.name || "Unassigned"]]) {
+            await transaction.run(`INSERT INTO stock_movements (id, property_id, item_id, type, qty, reason, ref, location_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ${nowSql}, ${nowSql})`,
+              [`MOV-${crypto.randomUUID()}`, propertyId, old.id, type, old.qty, `Location transfer ${type}: ${other}`, transferId, location]);
+          }
+        }
+        await transaction.run("UPDATE inventory_items SET location_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?", [locationId, old.id, propertyId]);
+        const updated = await transaction.get(`SELECT inventory_items.*, property_locations.name AS location_name FROM inventory_items LEFT JOIN property_locations ON property_locations.id = inventory_items.location_id WHERE inventory_items.id = ?`, [old.id]);
+        await writeAuditAsync(transaction, propertyId, request, "inventory_item", old.id, "location_transferred", old, { ...updated, fromLocationId: old.location_id, toLocationId: locationId, transferredQuantity: old.qty });
+        return { item: updated };
+      });
+      const updated = await database.get(`SELECT inventory_items.*, property_locations.name AS location_name FROM inventory_items LEFT JOIN property_locations ON property_locations.id = inventory_items.location_id WHERE inventory_items.id = ?`, [request.params.id]);
+      response.json(mapInventory(updated || result.item));
     } catch (error) {
       sendError(response, error);
     }
@@ -915,8 +953,8 @@ export function registerOperationsRoutes(app, database, propertyId) {
         if (item.qty + delta < 0) throw fail("Quantity cannot reduce stock below zero.", 409);
         const id = `MOV-${crypto.randomUUID()}`;
         const detail = `${String(reason).trim()}${note ? ` · ${String(note).trim()}` : ""}`;
-        await transaction.run(`INSERT INTO stock_movements (id, property_id, item_id, type, qty, reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ${nowSql}, ${nowSql})`,
-          [id, propertyId, item.id, type, quantity, detail]);
+        await transaction.run(`INSERT INTO stock_movements (id, property_id, item_id, type, qty, reason, location_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ${nowSql}, ${nowSql})`,
+          [id, propertyId, item.id, type, quantity, detail, item.location_id || null]);
         const nextCost = request.body.costKobo ? Math.round(Number(request.body.costKobo)) : item.cost_kobo;
         await transaction.run("UPDATE inventory_items SET qty = ?, cost_kobo = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [item.qty + delta, nextCost, item.id]);
         const movement = await transaction.get("SELECT * FROM stock_movements WHERE id = ?", [id]);
@@ -1065,8 +1103,8 @@ export function registerOperationsRoutes(app, database, propertyId) {
             const nextCost = lines.find((line) => line.itemId === itemId)?.costKobo ?? item.cost_kobo;
             await transaction.run("UPDATE inventory_items SET qty = qty + ?, cost_kobo = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [qty, nextCost, item.id]);
             await insertInventoryBatch(transaction, propertyId, item.id, order.id, qty, qty, nextCost, new Date().toISOString().slice(0, 10), lines.find((line) => line.itemId === itemId)?.expiryDate || null, order.supplier_id);
-            await transaction.run(`INSERT INTO stock_movements (id, property_id, item_id, type, qty, reason, ref, created_at, updated_at) VALUES (?, ?, ?, 'in', ?, ?, ?, ${nowSql}, ${nowSql})`,
-              [`MOV-${crypto.randomUUID()}`, propertyId, item.id, qty, `Received ${order.id}`, order.id]);
+            await transaction.run(`INSERT INTO stock_movements (id, property_id, item_id, type, qty, reason, ref, location_id, created_at, updated_at) VALUES (?, ?, ?, 'in', ?, ?, ?, ?, ${nowSql}, ${nowSql})`,
+              [`MOV-${crypto.randomUUID()}`, propertyId, item.id, qty, `Received ${order.id}`, order.id, item.location_id || null]);
             itemUpdates.set(itemId, { id: item.id, qty, costKobo: nextCost });
           }
           const remainingOpen = lines.some((line) => {

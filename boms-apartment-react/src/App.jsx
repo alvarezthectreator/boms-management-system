@@ -20,9 +20,11 @@ import {
   LogOut,
   Mail,
   Menu,
+  MessageCircle,
   MessageSquare,
   MoreHorizontal,
   Package,
+  Pencil,
   PhoneCall,
   Plus,
   Printer,
@@ -35,6 +37,7 @@ import {
   Sparkles,
   Star,
   TrendingUp,
+  Trash2,
   Utensils,
   Upload,
   UserRound,
@@ -558,7 +561,7 @@ function BookingDialog({ data, role, onClose, onSave, record }) {
       ["hold", "confirmed", "checked_in"].includes(booking.status) &&
       booking.checkIn < checkOut && booking.checkOut > checkIn,
     );
-    const label = unit.name || `Room ${unit.number}`;
+    const label = `${unit.locationName || "Building not assigned"} · ${unit.name || `Room ${unit.number}`}`;
     const availability = isBooked ? "Booked" : candidateIds.has(unit.id) ? "Available" : unit.rateKobo > 0 ? "Unavailable" : "Rate needed";
     return {
       value: unit.id,
@@ -791,9 +794,10 @@ function BookingDialog({ data, role, onClose, onSave, record }) {
   );
 }
 
-function RoomEditorDialog({ room, onClose, onSave }) {
+function RoomEditorDialog({ room, locations = [], onClose, onSave }) {
   const [name, setName] = useState(room?.name || "");
   const [number, setNumber] = useState(room?.number || "");
+  const [locationId, setLocationId] = useState(room?.locationId || "");
   const [floor, setFloor] = useState(room?.floor || "");
   const [sizeM2, setSizeM2] = useState(room?.sizeM2 || "");
   const [maxGuests, setMaxGuests] = useState(room?.maxGuests || 2);
@@ -851,6 +855,7 @@ function RoomEditorDialog({ room, onClose, onSave }) {
     const result = await onSave(room, {
       name,
       number,
+      locationId,
       floor,
       sizeM2,
       maxGuests,
@@ -875,6 +880,7 @@ function RoomEditorDialog({ room, onClose, onSave }) {
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="block text-sm font-medium text-[#34443a]">Room name<input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Azure" className="mt-1.5 min-h-10 w-full rounded-lg border border-[#dfe7e1] px-3 text-sm" /></label>
           <label className="block text-sm font-medium text-[#34443a]">Room number or code<input required maxLength={40} value={number} onChange={(event) => setNumber(event.target.value)} placeholder="e.g. Azure" className="mt-1.5 min-h-10 w-full rounded-lg border border-[#dfe7e1] px-3 text-sm" /></label>
+          <InputField field={{ name: "locationId", label: "Building", type: "select", options: [{ value: "", label: "Select building" }, ...locations.filter((location) => location.kind === "accommodation").map((location) => ({ value: location.id, label: location.name }))] }} value={locationId} onChange={(event) => setLocationId(event.target.value)} />
           <label className="block text-sm font-medium text-[#34443a]">Floor<input type="number" min="0" value={floor} onChange={(event) => setFloor(event.target.value)} className="mt-1.5 min-h-10 w-full rounded-lg border border-[#dfe7e1] px-3 text-sm" /></label>
           <label className="block text-sm font-medium text-[#34443a]">Size (m²)<input type="number" min="0" step="any" value={sizeM2} onChange={(event) => setSizeM2(event.target.value)} className="mt-1.5 min-h-10 w-full rounded-lg border border-[#dfe7e1] px-3 text-sm" /></label>
           <label className="block text-sm font-medium text-[#34443a]">Nightly rate (₦)<input required type="number" min="1" step="any" value={rateNaira} onChange={(event) => setRateNaira(event.target.value)} className="mt-1.5 min-h-10 w-full rounded-lg border border-[#dfe7e1] px-3 text-sm" /></label>
@@ -1036,6 +1042,7 @@ function RecordDialog({ type, data, onClose, onSave, record, role }) {
           ),
         },
         { name: "unit", label: "Unit of measure", placeholder: "pcs, kg, L…" },
+        { name: "locationId", label: "Stock location", type: "select", options: [{ value: "", label: "Choose a location" }, ...data.locations.map((location) => ({ value: location.id, label: location.name }))] },
         { name: "quantity", label: "Opening quantity", type: "number", min: 0 },
         { name: "minimum", label: "Minimum quantity", type: "number", min: 0 },
         { name: "costNaira", label: "Unit cost (₦)", type: "number", min: 0 },
@@ -1246,11 +1253,20 @@ function RecordDialog({ type, data, onClose, onSave, record, role }) {
             { value: "ceo", label: "CEO / Admin" },
           ] : [{ value: "worker", label: "Worker" }],
         },
+        { name: "locationId", label: "Assigned building / outlet", type: "select", required: role === "worker", options: [{ value: "", label: "Choose a work location" }, { value: "location-building-1", label: "Building 1" }, { value: "location-building-2", label: "Building 2 · Central kitchen" }, { value: "location-bar", label: "Bar & Lounge" }] },
       ],
     },
     setPassword: {
       title: `Set password · ${record?.name || "Team member"}`,
       fields: [{ name: "password", label: "New password", type: "password", hint: "Use at least 12 characters." }],
+    },
+    editUser: {
+      title: `Edit worker · ${record?.name || "Team member"}`,
+      fields: [
+        { name: "name", label: "Full name" },
+        { name: "email", label: "Email", type: "email" },
+        { name: "locationId", label: "Assigned building / outlet", type: "select", options: [{ value: "", label: "Choose a work location" }, { value: "location-building-1", label: "Building 1" }, { value: "location-building-2", label: "Building 2 · Central kitchen" }, { value: "location-bar", label: "Bar & Lounge" }] },
+      ],
     },
     cancel: {
       title: "Cancel reservation",
@@ -1325,6 +1341,8 @@ function RecordDialog({ type, data, onClose, onSave, record, role }) {
       ? { amountNaira: (balanceFor(record) / 100).toFixed(2) }
       : type === "block"
         ? { start: TODAY, end: "2026-10-06" }
+        : type === "editUser" && record
+          ? { name: record.name, email: record.email }
         : {};
   return (
     <ModalFrame
@@ -1375,8 +1393,9 @@ function RecordDialog({ type, data, onClose, onSave, record, role }) {
   );
 }
 
-function DashboardOrderComposer({ data, rooms, roomsLoading, roomsError, fnbData, loading, canAddMenu, onAddMenu, onSave }) {
+function DashboardOrderComposer({ data, rooms, roomsLoading, roomsError, fnbData, loading, canAddMenu, onAddMenu, onSave, role, userLocationId }) {
   const [station, setStation] = useState("kitchen");
+  const [serviceMode, setServiceMode] = useState(role === "worker" && userLocationId !== "location-bar" ? "room" : "lounge");
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [loungeGuestName, setLoungeGuestName] = useState("");
@@ -1385,11 +1404,14 @@ function DashboardOrderComposer({ data, rooms, roomsLoading, roomsError, fnbData
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const roomScrollerRef = useRef(null);
+  const checkedInBookings = data.bookings.filter((booking) => booking.databaseBooking && booking.status === "checked_in");
+  const checkedInUnitIds = new Set(checkedInBookings.map((booking) => booking.unitId));
+  const checkedInRooms = rooms.filter((room) => checkedInUnitIds.has(room.id));
   useEffect(() => {
-    if (!roomsLoading && selectedRoomId && !rooms.some((room) => room.id === selectedRoomId)) {
+    if (!roomsLoading && selectedRoomId && !checkedInRooms.some((room) => room.id === selectedRoomId)) {
       setSelectedRoomId("");
     }
-  }, [rooms, roomsLoading, selectedRoomId]);
+  }, [checkedInRooms, roomsLoading, selectedRoomId]);
   const stationItems = fnbData.menuItems.filter((item) => item.station === station);
   const catalogCards = stationItems.map((item) => ({
     id: item.id,
@@ -1397,7 +1419,6 @@ function DashboardOrderComposer({ data, rooms, roomsLoading, roomsError, fnbData
     category: item.category,
     item,
   }));
-  const checkedInBookings = data.bookings.filter((booking) => booking.databaseBooking && booking.status === "checked_in");
   const selectedRoomBooking = checkedInBookings.find((booking) => booking.unitId === selectedRoomId);
   const subtotalKobo = cart.reduce((sum, line) => {
     const item = fnbData.menuItems.find((entry) => entry.id === line.menuItemId);
@@ -1417,16 +1438,21 @@ function DashboardOrderComposer({ data, rooms, roomsLoading, roomsError, fnbData
   }
 
   async function placeOrder() {
-    if (!cart.length) return;
+    if (!cart.length || (serviceMode === "room" && !selectedRoomBooking)) {
+      if (serviceMode === "room" && !selectedRoomBooking) setError("Choose a checked-in room before sending a room-service order.");
+      return;
+    }
     setSaving(true);
     setError("");
     const booking = selectedRoomBooking;
     const result = await onSave({
       items: cart,
-      source: selectedRoomId ? "room_service" : "lounge",
-      paymentMethod: booking ? "room_charge" : paymentMethod,
-      bookingId: booking?.id || "",
-      unitId: selectedRoomId,
+      serviceMode,
+      source: serviceMode === "room" ? "room_service" : "bar",
+      paymentMethod,
+      originLocationId: serviceMode === "room" ? booking?.locationId : role === "worker" ? userLocationId : "location-bar",
+      bookingId: serviceMode === "room" ? booking?.id || "" : "",
+      unitId: serviceMode === "room" ? selectedRoomId : "",
       guestName: booking ? guestFor(data, booking.guestId)?.name || "" : loungeGuestName.trim(),
       notes: orderNotes.trim(),
     });
@@ -1446,32 +1472,34 @@ function DashboardOrderComposer({ data, rooms, roomsLoading, roomsError, fnbData
           <p className="mt-1 text-xs text-[#7a8880]">Choose menu items and send them to the kitchen or bar.</p>
         </div>
       </div>
-      <section className="mb-4" aria-label="Choose an order destination">
+      <div className="mb-4 inline-flex rounded-lg border border-[#dfe7e1] bg-white p-1" role="group" aria-label="Order destination">
+        <button type="button" disabled={role === "worker" && (!userLocationId || userLocationId === "location-bar")} aria-pressed={serviceMode === "room"} onClick={() => { setServiceMode("room"); setPaymentMethod("room_charge"); }} className={`min-h-9 rounded-md px-4 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${serviceMode === "room" ? "bg-[#176b54] text-white" : "text-[#718078] hover:bg-[#f2f6f3]"}`}>Room</button>
+        <button type="button" disabled={role === "worker" && userLocationId !== "location-bar"} aria-pressed={serviceMode === "lounge"} onClick={() => { setServiceMode("lounge"); setSelectedRoomId(""); setPaymentMethod("cash"); }} className={`min-h-9 rounded-md px-4 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${serviceMode === "lounge" ? "bg-[#176b54] text-white" : "text-[#718078] hover:bg-[#f2f6f3]"}`}>Lounge</button>
+      </div>
+      {role === "worker" && !userLocationId && <p role="alert" className="mb-4 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">Ask a manager to assign your work location before taking orders.</p>}
+      {serviceMode === "room" ? <section className="mb-4" aria-label="Choose an in-house room">
         <div className="mb-2 flex items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold text-[#34443a]">Select a room</h3>
+          <h3 className="text-sm font-semibold text-[#34443a]">Checked-in rooms · both buildings</h3>
           <div className="flex gap-1">
             <button type="button" aria-label="Scroll rooms left" title="Scroll rooms left" onClick={() => roomScrollerRef.current?.scrollBy({ left: -240, behavior: "smooth" })} className="grid size-9 place-items-center rounded-md border border-[#dfe7e1] text-[#52655a] hover:bg-[#edf3ee]"><ChevronLeft size={17} /></button>
             <button type="button" aria-label="Scroll rooms right" title="Scroll rooms right" onClick={() => roomScrollerRef.current?.scrollBy({ left: 240, behavior: "smooth" })} className="grid size-9 place-items-center rounded-md border border-[#dfe7e1] text-[#52655a] hover:bg-[#edf3ee]"><ChevronRight size={17} /></button>
           </div>
         </div>
-        <div ref={roomScrollerRef} className="flex snap-x gap-3 overflow-x-auto pb-2" aria-label="Rooms">
-          <button type="button" aria-pressed={!selectedRoomId} onClick={() => setSelectedRoomId("")} className={`w-36 shrink-0 snap-start overflow-hidden rounded-lg border text-left transition ${!selectedRoomId ? "border-[#16836b] ring-2 ring-[#16836b]/20" : "border-[#dfe7e1] hover:border-[#9eafa4]"}`}>
-            <span className="grid aspect-square place-items-center bg-[#edf3ee] text-[#688273]"><Utensils size={28} /></span>
-            <span className="block p-2.5"><span className="block truncate text-sm font-semibold text-[#2c3b34]">Lounge</span><span className="mt-0.5 block text-xs capitalize text-[#77857d]">Personal order</span></span>
-          </button>
-          {rooms.map((room) => {
+        <div ref={roomScrollerRef} className="flex snap-x gap-3 overflow-x-auto pb-2" aria-label="Checked-in rooms">
+          {checkedInRooms.map((room) => {
             const image = room.images?.[0];
+            const booking = checkedInBookings.find((entry) => entry.unitId === room.id);
             const isSelected = selectedRoomId === room.id;
-            return <button key={room.id} type="button" aria-pressed={isSelected} aria-label={`${room.name || `Room ${room.number}`}, ${room.roomTypeName || "Room"}, ${room.status.replaceAll("_", " ")}`} onClick={() => setSelectedRoomId(room.id)} className={`w-36 shrink-0 snap-start overflow-hidden rounded-lg border text-left transition ${isSelected ? "border-[#16836b] ring-2 ring-[#16836b]/20" : "border-[#dfe7e1] hover:border-[#9eafa4]"}`}>
+            return <button key={room.id} type="button" aria-pressed={isSelected} aria-label={`${room.locationName || "Unassigned building"}, room ${room.number}, ${guestFor(data, booking?.guestId)?.name || "Guest"}`} onClick={() => setSelectedRoomId(room.id)} className={`w-40 shrink-0 snap-start overflow-hidden rounded-lg border text-left transition ${isSelected ? "border-[#16836b] ring-2 ring-[#16836b]/20" : "border-[#dfe7e1] hover:border-[#9eafa4]"}`}>
               {image ? <img src={image} alt={`Room ${room.number}`} loading="lazy" className="aspect-square w-full object-cover" /> : <span className="grid aspect-square place-items-center bg-[#edf3ee] text-[#688273]"><BedDouble size={28} /></span>}
-              <span className="block p-2.5"><span className="block truncate text-sm font-semibold text-[#2c3b34]">{room.name || `Room ${room.number}`}</span><span className="mt-0.5 block truncate text-xs text-[#77857d]">{room.roomTypeName || "Room"} · {room.status.replaceAll("_", " ")}</span></span>
+              <span className="block p-2.5"><span className="block truncate text-[11px] font-semibold uppercase text-[#176b54]">{room.locationName || "Building not assigned"}</span><span className="block truncate text-sm font-semibold text-[#2c3b34]">Room {room.number}</span><span className="mt-0.5 block truncate text-xs text-[#77857d]">{guestFor(data, booking?.guestId)?.name || "Checked-in guest"}</span></span>
             </button>;
           })}
-          {roomsLoading && <p className="py-8 text-sm text-[#718078]">Loading rooms from the property database…</p>}
+          {roomsLoading && <p className="py-8 text-sm text-[#718078]">Loading rooms from both buildings…</p>}
           {!roomsLoading && roomsError && <p role="alert" className="py-8 text-sm text-rose-700">Could not load rooms from the property database: {roomsError}</p>}
-          {!roomsLoading && !roomsError && rooms.length === 0 && <p className="py-8 text-sm text-[#718078]">No rooms are configured in the property database.</p>}
+          {!roomsLoading && !roomsError && !checkedInRooms.length && <p className="py-8 text-sm text-[#718078]">No checked-in rooms are available for room service.</p>}
         </div>
-      </section>
+      </section> : <div className="mb-4 rounded-lg border border-[#e1e9e3] bg-[#f7f9f7] px-4 py-3 text-sm text-[#44574c]">Lounge order · Bar &amp; Lounge · no room booking attached</div>}
       <div className="mb-4 flex justify-end">
         <div className="inline-flex rounded-lg bg-[#edf2ee] p-1" role="group" aria-label="Menu section">
           {[ ["kitchen", "Food"], ["bar", "Drinks"] ].map(([key, label]) => (
@@ -1511,14 +1539,14 @@ function DashboardOrderComposer({ data, rooms, roomsLoading, roomsError, fnbData
         </div>
         <div className="flex min-h-48 flex-col rounded-lg border border-[#e3eae5] p-3">
           <div className="mb-2 flex items-center justify-between"><h3 className="text-sm font-semibold">Current order</h3><span className="text-xs text-[#718078]">{cart.reduce((sum, line) => sum + line.quantity, 0)} items</span></div>
-          {!selectedRoomBooking && <label className="mb-3 block text-xs font-medium text-[#58685e]">Guest name (optional)
+          {serviceMode === "lounge" && <label className="mb-3 block text-xs font-medium text-[#58685e]">Guest name (optional)
             <input value={loungeGuestName} onChange={(event) => setLoungeGuestName(event.target.value)} placeholder="Name for this order" className="mt-1 block min-h-10 w-full rounded-md border border-[#dfe7e1] px-2.5 text-sm" />
           </label>}
-          {!selectedRoomBooking && <label className="mb-3 block text-xs font-medium text-[#58685e]">Payment
+          <label className="mb-3 block text-xs font-medium text-[#58685e]">Payment
             <select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} className="mt-1 block min-h-10 w-full rounded-md border border-[#dfe7e1] bg-white px-2.5 text-sm">
-              {["cash", "card", "transfer"].map((method) => <option key={method} value={method}>{method[0].toUpperCase() + method.slice(1)}</option>)}
+              {(serviceMode === "room" ? ["room_charge", "cash", "card", "transfer"] : ["cash", "card", "transfer"]).map((method) => <option key={method} value={method}>{method === "room_charge" ? "Charge to room folio" : method[0].toUpperCase() + method.slice(1)}</option>)}
             </select>
-          </label>}
+          </label>
           <label className="mb-3 block text-xs font-medium text-[#58685e]">Order notes or allergies
             <textarea value={orderNotes} onChange={(event) => setOrderNotes(event.target.value)} maxLength={500} rows={2} placeholder="Allergies or preparation requests" className="mt-1 block w-full resize-y rounded-md border border-[#dfe7e1] bg-white px-2.5 py-2 text-sm font-normal" />
           </label>
@@ -1537,7 +1565,7 @@ function DashboardOrderComposer({ data, rooms, roomsLoading, roomsError, fnbData
           <div className="mt-3 border-t border-[#e8eeea] pt-3">
             <div className="mb-2 flex justify-between text-sm font-semibold"><span>Total</span><span>{formatMoney(totalKobo)}</span></div>
             {error && <p role="alert" className="mb-2 text-xs text-rose-700">{error}</p>}
-            <Button className="w-full" disabled={!cart.length || saving} onClick={placeOrder}>{saving ? "Sending…" : "Send order"}<ArrowRight size={15} /></Button>
+            <Button className="w-full" disabled={!cart.length || saving || (role === "worker" && !userLocationId) || (serviceMode === "room" && !selectedRoomBooking)} onClick={placeOrder}>{saving ? "Sending…" : "Send order"}<ArrowRight size={15} /></Button>
           </div>
         </div>
       </div>
@@ -1602,6 +1630,7 @@ function Dashboard({
   checkoutFollowUps,
   lagosClock,
   role,
+  userLocationId,
 }) {
   const today = lagosClock?.date || TODAY;
   const inventoryUnits = data.units.some((unit) => unit.databaseRoom)
@@ -1713,7 +1742,7 @@ function Dashboard({
         </div>
         <LowStockRestockBanner items={lowStockItems} role={role} onNavigate={onNavigate} onRequestRestock={onRequestRestock} />
 
-        <DashboardOrderComposer data={data} rooms={roomInventory} roomsLoading={roomsLoading} roomsError={roomsError} fnbData={fnbData} loading={fnbLoading} canAddMenu={canAddMenu} onAddMenu={onAddMenu} onSave={onSaveFnbOrder} />
+        <DashboardOrderComposer data={data} rooms={roomInventory} roomsLoading={roomsLoading} roomsError={roomsError} fnbData={fnbData} loading={fnbLoading} canAddMenu={canAddMenu} onAddMenu={onAddMenu} onSave={onSaveFnbOrder} role={role} userLocationId={userLocationId} />
 
         <div className="mt-4 grid gap-4 xl:grid-cols-2">
           <Panel className="p-4 sm:p-5">
@@ -1987,7 +2016,7 @@ function Dashboard({
             </div>
             <button onClick={() => onNavigate("bookings")} className="text-sm font-medium text-[#176b54] hover:underline">All bookings</button>
           </div>
-          <DataTable columns={[{ key: "id", label: "Booking ID" }, { key: "guest", label: "Guest", render: (row) => guestFor(data, row.guestId)?.name }, { key: "unit", label: "Unit", render: (row) => unitFor(data, row.unitId)?.number }, { key: "dates", label: "Stay", render: (row) => `${formatDate(row.checkIn)} – ${formatDate(row.checkOut)}` }, { key: "status", label: "Status", render: (row) => <Status value={row.status} /> }, { key: "total", label: "Total", render: (row) => formatMoney(row.totalKobo) }]} rows={recent} />
+          <DataTable columns={[{ key: "id", label: "Booking ID" }, { key: "guest", label: "Guest", render: (row) => guestFor(data, row.guestId)?.name }, { key: "unit", label: "Building / unit", render: (row) => `${unitFor(data, row.unitId)?.locationName || "Unassigned"} · ${unitFor(data, row.unitId)?.number || "—"}` }, { key: "dates", label: "Stay", render: (row) => `${formatDate(row.checkIn)} – ${formatDate(row.checkOut)}` }, { key: "status", label: "Status", render: (row) => <Status value={row.status} /> }, { key: "total", label: "Total", render: (row) => formatMoney(row.totalKobo) }]} rows={recent} />
         </Panel>
 
         <Panel className="p-4 sm:p-5">
@@ -2002,7 +2031,7 @@ function Dashboard({
             data.bookings.filter((booking) => booking.checkIn === today && booking.status === "confirmed").map((booking) => (
               <div key={booking.id} className="flex items-center gap-3 border-t border-[#edf1ee] py-3">
                 <span className="grid size-9 place-items-center rounded-full bg-[#e8f3ec] text-xs font-semibold text-[#23694f]">{initials(guestFor(data, booking.guestId)?.name)}</span>
-                <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-[#344239]">{guestFor(data, booking.guestId)?.name}</p><p className="text-xs text-[#7b8981]">Unit {unitFor(data, booking.unitId)?.number} · {booking.adults} adults</p></div>
+                <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-[#344239]">{guestFor(data, booking.guestId)?.name}</p><p className="text-xs text-[#7b8981]">{unitFor(data, booking.unitId)?.locationName || "Unassigned"} · Unit {unitFor(data, booking.unitId)?.number} · {booking.adults} adults</p></div>
                 <Button variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => onBookingAction(booking, "checkin")}>Check in</Button>
               </div>
             ))
@@ -2092,9 +2121,9 @@ function BookingsPage({
     },
     {
       key: "room",
-      label: "Room",
+      label: "Building / room",
       render: (row) =>
-        `${unitFor(data, row.unitId)?.number || "—"} · ${roomTypeFor(data, unitFor(data, row.unitId)?.roomTypeId)?.name || "—"}`,
+        `${unitFor(data, row.unitId)?.locationName || "Unassigned"} · ${unitFor(data, row.unitId)?.number || "—"} · ${roomTypeFor(data, unitFor(data, row.unitId)?.roomTypeId)?.name || "—"}`,
     },
     {
       key: "stay",
@@ -2648,87 +2677,145 @@ function HousekeepingPage({ data, role, currentUserName, onCreate, onTaskAction 
   );
 }
 
-function MenuItemDialog({ data, onClose, onSave, preset = null }) {
-  const [name, setName] = useState(preset?.name || "");
-  const [category, setCategory] = useState(preset?.category || "");
-  const [description, setDescription] = useState("");
-  const [station, setStation] = useState(preset?.station || "kitchen");
-  const [priceNaira, setPriceNaira] = useState("");
-  const [recipe, setRecipe] = useState(preset ? [] : [{ inventoryItemId: data.inventory[0]?.id || "", quantity: "1" }]);
+function MenuItemDialog({ data, onClose, onSave, preset = null, record = null }) {
+  const [name, setName] = useState(record?.name || preset?.name || "");
+  const [category, setCategory] = useState(record?.category || preset?.category || "");
+  const [description, setDescription] = useState(record?.description || "");
+  const [station, setStation] = useState(record?.station || preset?.station || "kitchen");
+  const [fulfillmentLocationId, setFulfillmentLocationId] = useState(record?.fulfillmentLocationId || (preset?.station === "bar" ? "location-bar" : "location-building-2"));
+  const [priceNaira, setPriceNaira] = useState(record ? String(record.priceKobo / 100) : "");
+  const [imageUrl, setImageUrl] = useState(record?.imageUrl || preset?.imageUrl || "");
+  const [imageDataUrl, setImageDataUrl] = useState("");
+  const [recipe, setRecipe] = useState(record
+    ? record.recipe.map((line) => ({ inventoryItemId: line.id, quantity: String(line.quantity) }))
+    : preset ? [] : [{ inventoryItemId: data.inventory[0]?.id || "", quantity: "1" }]);
   const [modifiers, setModifiers] = useState([]);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const locationInventory = data.inventory.filter((item) => item.locationId === fulfillmentLocationId);
+
+  async function chooseImage(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 15 * 1024 * 1024) {
+      setError("Choose a JPG, PNG, or WebP image no larger than 15 MB.");
+      return;
+    }
+    try {
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, 1400 / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(bitmap.width * scale);
+      canvas.height = Math.round(bitmap.height * scale);
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+      let compressed = null;
+      for (const quality of [0.82, 0.72, 0.62, 0.52]) {
+        compressed = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", quality));
+        if (compressed && compressed.size <= 2.4 * 1024 * 1024) break;
+      }
+      if (!compressed || compressed.size > 2.4 * 1024 * 1024) {
+        setError("This image could not be compressed enough. Choose a smaller photo.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        setImageDataUrl(String(reader.result || ""));
+        setImageUrl("");
+        setError("");
+      };
+      reader.onerror = () => setError("The selected image could not be read.");
+      reader.readAsDataURL(compressed);
+    } catch {
+      setError("The selected image could not be processed. Try a JPG, PNG, or WebP photo.");
+    }
+  }
 
   async function submit(event) {
     event.preventDefault();
-    if (!name.trim() || !category.trim() || !priceNaira || !recipe.length || recipe.some((line) => !line.inventoryItemId || Number(line.quantity) <= 0)) {
-      setError("Enter the menu details and at least one valid recipe ingredient.");
+    if (!name.trim() || !category.trim() || !priceNaira || (!record && !recipe.length) || recipe.some((line) => !line.inventoryItemId || Number(line.quantity) <= 0)) {
+      setError("Enter the menu details and valid recipe ingredients. New menu items need at least one ingredient.");
       return;
     }
     setSaving(true);
-    const result = await onSave({
+    const payload = {
       name: name.trim(),
       category: category.trim(),
       description,
+      imageUrl: imageDataUrl || imageUrl.trim(),
       station,
+      fulfillmentLocationId,
       priceKobo: Math.round(Number(priceNaira) * 100),
-      recipe: recipe.map((line) => ({ inventoryItemId: line.inventoryItemId, quantity: Number(line.quantity) })),
-      modifiers: modifiers.filter((modifier) => modifier.name.trim()).map((modifier) => ({
+    };
+    if (!record || recipe.length) payload.recipe = recipe.map((line) => ({ inventoryItemId: line.inventoryItemId, quantity: Number(line.quantity) }));
+    if (!record) payload.modifiers = modifiers.filter((modifier) => modifier.name.trim()).map((modifier) => ({
         name: modifier.name.trim(),
         priceDeltaKobo: Math.round(Number(modifier.priceNaira || 0) * 100),
         recipe: modifier.inventoryItemId && Number(modifier.quantity) > 0
           ? [{ inventoryItemId: modifier.inventoryItemId, quantity: Number(modifier.quantity) }]
           : [],
-      })),
-    });
+      }));
+    const result = await onSave(payload, record);
     setSaving(false);
     if (result?.error) setError(result.error);
     else onClose();
   }
 
   return (
-    <ModalFrame title="Add menu item" description="Choose ingredients so accepting an order deducts stock." onClose={onClose}>
+    <ModalFrame title={record ? `Edit ${record.name}` : "Add menu item"} description={record ? "Update the menu details, price, image, or recipe." : "Choose ingredients so accepting an order deducts stock."} onClose={onClose}>
       <form onSubmit={submit} className="space-y-5 p-5 sm:p-6">
         <div className="grid gap-4 sm:grid-cols-2">
           <InputField field={{ name: "name", label: "Menu item" }} value={name} onChange={(event) => setName(event.target.value)} />
           <InputField field={{ name: "category", label: "Category", placeholder: "Breakfast, drinks…" }} value={category} onChange={(event) => setCategory(event.target.value)} />
           <InputField field={{ name: "station", label: "Station", type: "select", options: ["kitchen", "bar"].map((value) => ({ value, label: value === "kitchen" ? "Kitchen" : "Bar" })) }} value={station} onChange={(event) => setStation(event.target.value)} />
+          <InputField field={{ name: "fulfillmentLocationId", label: "Fulfillment location", type: "select", options: data.locations.map((location) => ({ value: location.id, label: location.name })) }} value={fulfillmentLocationId} onChange={(event) => { setFulfillmentLocationId(event.target.value); setRecipe((lines) => lines.map((line) => ({ ...line, inventoryItemId: "" }))); }} />
           <InputField field={{ name: "price", label: "Price (₦)", type: "number", min: 0 }} value={priceNaira} onChange={(event) => setPriceNaira(event.target.value)} />
           <div className="sm:col-span-2"><InputField field={{ name: "description", label: "Description", type: "textarea", required: false }} value={description} onChange={(event) => setDescription(event.target.value)} /></div>
         </div>
         <div className="space-y-3 border-t border-[#e8eeea] pt-4">
-          <div className="flex items-center justify-between"><div><h3 className="text-sm font-semibold">Recipe</h3>{preset && !data.inventory.length && <p className="mt-1 text-xs text-amber-800">Add the required ingredients to Inventory before setting up this dish.</p>}</div><Button type="button" variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => setRecipe((lines) => [...lines, { inventoryItemId: preset ? "" : data.inventory[0]?.id || "", quantity: "1" }])}><Plus size={14} />Ingredient</Button></div>
+          <div className="aspect-[16/9] overflow-hidden rounded-lg bg-[#edf2ed]">
+            {(imageDataUrl || imageUrl) ? <img src={imageDataUrl || imageUrl} alt={`${name || "Food"} preview`} className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center text-[#789082]"><ImagePlus size={30} strokeWidth={1.5} /></div>}
+          </div>
+          <label className="block text-sm font-medium text-[#34443a]">
+            Upload food photo
+            <span className="mt-1 block text-xs font-normal text-[#718078]">Optional. JPG, PNG, or WebP, up to 15 MB. Image is compressed before saving.</span>
+            <input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseImage} className="mt-2 block w-full text-sm text-[#59695f] file:mr-3 file:rounded-md file:border-0 file:bg-[#edf3ef] file:px-3 file:py-2 file:font-medium file:text-[#284237]" />
+          </label>
+          <InputField field={{ name: "imageUrl", label: "Or use an HTTPS image URL", type: "url", required: false }} value={imageUrl} onChange={(event) => { setImageUrl(event.target.value); setImageDataUrl(""); }} />
+        </div>
+        <div className="space-y-3 border-t border-[#e8eeea] pt-4">
+          <div className="flex items-center justify-between"><div><h3 className="text-sm font-semibold">Recipe · {data.locations.find((location) => location.id === fulfillmentLocationId)?.name || "Choose a location"}</h3>{!locationInventory.length && <p className="mt-1 text-xs text-amber-800">Add stock at this location before setting up the recipe.</p>}</div><Button type="button" variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => setRecipe((lines) => [...lines, { inventoryItemId: locationInventory[0]?.id || "", quantity: "1" }])}><Plus size={14} />Ingredient</Button></div>
           {recipe.map((line, index) => (
             <div key={index} className="grid grid-cols-[1fr_100px_auto] items-end gap-2">
-              <InputField field={{ name: `ingredient-${index}`, label: index === 0 ? "Inventory item" : `Ingredient ${index + 1}`, type: "select", options: data.inventory.map((item) => ({ value: item.id, label: `${item.name} · ${item.unit}` })) }} value={line.inventoryItemId} onChange={(event) => setRecipe((lines) => lines.map((item, row) => row === index ? { ...item, inventoryItemId: event.target.value } : item))} />
+              <InputField field={{ name: `ingredient-${index}`, label: index === 0 ? "Inventory item" : `Ingredient ${index + 1}`, type: "select", options: [{ value: "", label: "Choose stock item" }, ...locationInventory.map((item) => ({ value: item.id, label: `${item.name} · ${item.unit}` }))] }} value={line.inventoryItemId} onChange={(event) => setRecipe((lines) => lines.map((item, row) => row === index ? { ...item, inventoryItemId: event.target.value } : item))} />
               <InputField field={{ name: `quantity-${index}`, label: "Qty", type: "number", min: 0.01, step: 0.01 }} value={line.quantity} onChange={(event) => setRecipe((lines) => lines.map((item, row) => row === index ? { ...item, quantity: event.target.value } : item))} />
               {recipe.length > 1 && <Button type="button" variant="quiet" className="min-h-10 px-2" aria-label="Remove ingredient" onClick={() => setRecipe((lines) => lines.filter((_, row) => row !== index))}><X size={16} /></Button>}
             </div>
           ))}
         </div>
-        <div className="space-y-3 border-t border-[#e8eeea] pt-4">
+        {!record && <div className="space-y-3 border-t border-[#e8eeea] pt-4">
           <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">Modifiers</h3><Button type="button" variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => setModifiers((items) => [...items, { name: "", priceNaira: "0", inventoryItemId: "", quantity: "1" }])}><Plus size={14} />Modifier</Button></div>
           {modifiers.map((modifier, index) => (
             <div key={index} className="grid gap-2 rounded-lg border border-[#e8eeea] p-3 sm:grid-cols-2">
               <InputField field={{ name: `modifier-${index}`, label: "Name" }} value={modifier.name} onChange={(event) => setModifiers((items) => items.map((item, row) => row === index ? { ...item, name: event.target.value } : item))} />
               <InputField field={{ name: `modifier-price-${index}`, label: "Extra price (₦)", type: "number", min: 0 }} value={modifier.priceNaira} onChange={(event) => setModifiers((items) => items.map((item, row) => row === index ? { ...item, priceNaira: event.target.value } : item))} />
-              <InputField field={{ name: `modifier-stock-${index}`, label: "Extra ingredient (optional)", type: "select", required: false, options: [{ value: "", label: "No extra ingredient" }, ...data.inventory.map((item) => ({ value: item.id, label: `${item.name} · ${item.unit}` }))] }} value={modifier.inventoryItemId} onChange={(event) => setModifiers((items) => items.map((item, row) => row === index ? { ...item, inventoryItemId: event.target.value } : item))} />
+              <InputField field={{ name: `modifier-stock-${index}`, label: "Extra ingredient (optional)", type: "select", required: false, options: [{ value: "", label: "No extra ingredient" }, ...locationInventory.map((item) => ({ value: item.id, label: `${item.name} · ${item.unit}` }))] }} value={modifier.inventoryItemId} onChange={(event) => setModifiers((items) => items.map((item, row) => row === index ? { ...item, inventoryItemId: event.target.value } : item))} />
               <div className="flex items-end gap-2"><InputField field={{ name: `modifier-qty-${index}`, label: "Extra qty", type: "number", min: 0.01, step: 0.01, required: false }} value={modifier.quantity} onChange={(event) => setModifiers((items) => items.map((item, row) => row === index ? { ...item, quantity: event.target.value } : item))} /><Button type="button" variant="quiet" className="min-h-10 px-2" aria-label="Remove modifier" onClick={() => setModifiers((items) => items.filter((_, row) => row !== index))}><X size={16} /></Button></div>
             </div>
           ))}
-        </div>
+        </div>}
         {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
-        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={saving || !data.inventory.length}>{saving ? "Saving…" : "Save menu item"}</Button></div>
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={saving || (!record && !data.inventory.length)}>{saving ? "Saving…" : record ? "Save changes" : "Save menu item"}</Button></div>
       </form>
     </ModalFrame>
   );
 }
 
-function FnbOrderDialog({ data, fnbData, onClose, onSave }) {
+function FnbOrderDialog({ data, fnbData, onClose, onSave, role, userLocationId }) {
   const checkedInBookings = data.bookings.filter((booking) => booking.databaseBooking && booking.status === "checked_in");
-  const [paymentMethod, setPaymentMethod] = useState(checkedInBookings.length ? "room_charge" : "cash");
-  const [bookingId, setBookingId] = useState(checkedInBookings[0]?.id || "");
-  const [source, setSource] = useState(checkedInBookings.length ? "room_service" : "lounge");
+  const [serviceMode, setServiceMode] = useState(role === "worker" && userLocationId !== "location-bar" ? "room" : "lounge");
+  const [paymentMethod, setPaymentMethod] = useState("cash");
+  const [bookingId, setBookingId] = useState("");
   const [guestName, setGuestName] = useState("");
   const [cart, setCart] = useState([]);
   const [notes, setNotes] = useState("");
@@ -2752,18 +2839,20 @@ function FnbOrderDialog({ data, fnbData, onClose, onSave }) {
   }
   async function submit(event) {
     event.preventDefault();
-    if (!cart.length || (paymentMethod === "room_charge" && !bookingId)) {
-      setError("Add menu items and choose an active booking for room charges.");
+    if (!cart.length || (serviceMode === "room" && !bookingId)) {
+      setError("Add menu items and choose a checked-in room for Room orders.");
       return;
     }
     setSaving(true);
     const booking = checkedInBookings.find((item) => item.id === bookingId);
     const result = await onSave({
       items: cart,
-      source,
+      serviceMode,
+      source: serviceMode === "room" ? "room_service" : "bar",
       paymentMethod,
       unitId: booking ? unitFor(data, booking.unitId)?.id : "",
-      bookingId: paymentMethod === "room_charge" ? bookingId : "",
+      bookingId: serviceMode === "room" ? bookingId : "",
+      originLocationId: serviceMode === "room" ? unitFor(data, booking?.unitId)?.locationId : role === "worker" ? userLocationId : "location-bar",
       guestName: booking ? guestFor(data, booking.guestId)?.name : guestName.trim(),
       notes,
     });
@@ -2774,11 +2863,15 @@ function FnbOrderDialog({ data, fnbData, onClose, onSave }) {
   return (
     <ModalFrame title="New food & drink order" description="Stock is deducted when the kitchen/bar accepts the order." onClose={onClose}>
       <form onSubmit={submit} className="space-y-5 p-5 sm:p-6">
+        <div className="inline-flex rounded-lg border border-[#dfe7e1] bg-white p-1" role="group" aria-label="Order destination">
+          <button type="button" disabled={role === "worker" && (!userLocationId || userLocationId === "location-bar")} aria-pressed={serviceMode === "room"} onClick={() => { setServiceMode("room"); setPaymentMethod("room_charge"); }} className={`min-h-9 rounded-md px-4 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${serviceMode === "room" ? "bg-[#176b54] text-white" : "text-[#718078] hover:bg-[#f2f6f3]"}`}>Room</button>
+          <button type="button" disabled={role === "worker" && userLocationId !== "location-bar"} aria-pressed={serviceMode === "lounge"} onClick={() => { setServiceMode("lounge"); setBookingId(""); setPaymentMethod("cash"); }} className={`min-h-9 rounded-md px-4 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${serviceMode === "lounge" ? "bg-[#176b54] text-white" : "text-[#718078] hover:bg-[#f2f6f3]"}`}>Lounge</button>
+        </div>
+        {role === "worker" && !userLocationId && <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">Ask a manager to assign your work location before taking orders.</p>}
         <div className="grid gap-4 sm:grid-cols-2">
-          <InputField field={{ name: "source", label: "Order source", type: "select", options: ["lounge", "room_service", "restaurant", "bar", "counter", "poolside"].map((value) => ({ value, label: value.replaceAll("_", " ") })) }} value={source} onChange={(event) => setSource(event.target.value)} />
-          <InputField field={{ name: "paymentMethod", label: "Payment", type: "select", options: ["room_charge", "cash", "card", "transfer"].map((value) => ({ value, label: value.replaceAll("_", " ") })) }} value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} />
-          {paymentMethod === "room_charge" && <div className="sm:col-span-2"><InputField field={{ name: "bookingId", label: "Checked-in booking", type: "select", options: checkedInBookings.map((booking) => ({ value: booking.id, label: `${unitFor(data, booking.unitId)?.number} · ${guestFor(data, booking.guestId)?.name} · ${booking.id}` })) }} value={bookingId} onChange={(event) => setBookingId(event.target.value)} /></div>}
-          {paymentMethod !== "room_charge" && <div className="sm:col-span-2"><InputField field={{ name: "guestName", label: "Guest name (optional)" }} value={guestName} onChange={(event) => setGuestName(event.target.value)} /></div>}
+          <InputField field={{ name: "paymentMethod", label: "Payment", type: "select", options: (serviceMode === "room" ? ["room_charge", "cash", "card", "transfer"] : ["cash", "card", "transfer"]).map((value) => ({ value, label: value === "room_charge" ? "Charge to room folio" : value[0].toUpperCase() + value.slice(1) })) }} value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} />
+          {serviceMode === "room" && <div className="sm:col-span-2"><InputField field={{ name: "bookingId", label: "Checked-in room · both buildings", type: "select", options: [{ value: "", label: "Choose a checked-in room", disabled: true }, ...checkedInBookings.map((booking) => ({ value: booking.id, label: `${unitFor(data, booking.unitId)?.locationName || "Unassigned"} · Room ${unitFor(data, booking.unitId)?.number} · ${guestFor(data, booking.guestId)?.name || "Guest"}` }))] }} value={bookingId} onChange={(event) => setBookingId(event.target.value)} /></div>}
+          {serviceMode === "lounge" && <div className="sm:col-span-2"><p className="rounded-md bg-[#f7f9f7] px-3 py-2 text-xs text-[#58685e]">Bar &amp; Lounge order · no room or booking attached</p><InputField field={{ name: "guestName", label: "Guest name (optional)" }} value={guestName} onChange={(event) => setGuestName(event.target.value)} /></div>}
         </div>
         <div className="grid max-h-48 gap-2 overflow-y-auto sm:grid-cols-2">
           {menu.map((item) => <button key={item.id} type="button" onClick={() => addItem(item)} className="flex min-h-12 items-center justify-between gap-2 rounded-lg border border-[#e1e9e3] px-3 py-2 text-left hover:bg-[#f4f7f4]"><span><span className="block text-sm font-medium">{item.name}</span><span className="text-xs text-[#77857d]">{item.category} · {item.station}</span></span><span className="text-sm font-semibold">{formatMoney(item.priceKobo)}</span></button>)}
@@ -2794,14 +2887,36 @@ function FnbOrderDialog({ data, fnbData, onClose, onSave }) {
         </div>
         <InputField field={{ name: "notes", label: "Order notes / allergies", type: "textarea", required: false }} value={notes} onChange={(event) => setNotes(event.target.value)} />
         {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
-        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={saving || !menu.length}>{saving ? "Placing…" : "Place order"}</Button></div>
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={saving || !menu.length || (role === "worker" && !userLocationId) || (serviceMode === "room" && !bookingId)}>{saving ? "Placing…" : "Place order"}</Button></div>
       </form>
     </ModalFrame>
   );
 }
 
+function FnbPaymentDialog({ order, onClose, onSave }) {
+  const [method, setMethod] = useState(order.paymentMethod || (order.serviceMode === "room" ? "room_charge" : "cash"));
+  const [amountNaira, setAmountNaira] = useState((order.outstandingKobo / 100).toFixed(2));
+  const [reference, setReference] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  async function submit(event) {
+    event.preventDefault();
+    setSaving(true);
+    const result = await onSave(order, {
+      method,
+      amountKobo: Math.round(Number(amountNaira) * 100),
+      reference: reference.trim(),
+    });
+    setSaving(false);
+    if (result?.error) setError(result.error);
+    else onClose();
+  }
+  const methods = order.serviceMode === "room" ? ["room_charge", "cash", "card", "transfer"] : ["cash", "card", "transfer"];
+  return <ModalFrame title={`Record payment · ${order.orderNumber}`} description={`Paid ${formatMoney(order.paidKobo)} · Posted to folio ${formatMoney(order.roomFolioKobo)} · Remaining ${formatMoney(order.outstandingKobo)}`} onClose={onClose}><form onSubmit={submit} className="space-y-4 p-5"><InputField field={{ name: "method", label: "Payment method", type: "select", options: methods.map((value) => ({ value, label: value === "room_charge" ? "Post to room folio" : value[0].toUpperCase() + value.slice(1) })) }} value={method} onChange={(event) => setMethod(event.target.value)} /><InputField field={{ name: "amount", label: "Amount received (₦)", type: "number", min: 0.01, max: order.outstandingKobo / 100, step: 0.01 }} value={amountNaira} onChange={(event) => setAmountNaira(event.target.value)} /><InputField field={{ name: "reference", label: "Receipt / reference", required: false }} value={reference} onChange={(event) => setReference(event.target.value)} />{method === "room_charge" && <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">This posts the amount to the guest folio; it is not cash received.</p>}{error && <p role="alert" className="text-sm text-rose-700">{error}</p>}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={saving || order.outstandingKobo <= 0}>{saving ? "Recording…" : "Record payment"}</Button></div></form></ModalFrame>;
+}
+
 function FnbRefundDialog({ order, onClose, onSave }) {
-  const [amountNaira, setAmountNaira] = useState((order.totalKobo / 100).toFixed(2));
+  const [amountNaira, setAmountNaira] = useState((order.refundableKobo / 100).toFixed(2));
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
   async function submit(event) {
@@ -2810,23 +2925,97 @@ function FnbRefundDialog({ order, onClose, onSave }) {
     if (result?.error) setError(result.error);
     else onClose();
   }
-  return <ModalFrame title={`Refund ${order.orderNumber}`} description="Refunds are recorded against the original order." onClose={onClose}><form onSubmit={submit} className="space-y-4 p-5"><InputField field={{ name: "amount", label: "Refund amount (₦)", type: "number", min: 0.01 }} value={amountNaira} onChange={(event) => setAmountNaira(event.target.value)} /><InputField field={{ name: "reason", label: "Reason", type: "textarea" }} value={reason} onChange={(event) => setReason(event.target.value)} />{error && <p role="alert" className="text-sm text-rose-700">{error}</p>}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit">Record refund</Button></div></form></ModalFrame>;
+  return <ModalFrame title={`Refund ${order.orderNumber}`} description={`Refundable receipts and folio posts · ${formatMoney(order.refundableKobo)}. Refunds remain linked to their original payment.`} onClose={onClose}><form onSubmit={submit} className="space-y-4 p-5"><InputField field={{ name: "amount", label: "Refund amount (₦)", type: "number", min: 0.01, max: order.refundableKobo / 100, step: 0.01 }} value={amountNaira} onChange={(event) => setAmountNaira(event.target.value)} /><InputField field={{ name: "reason", label: "Reason", type: "textarea" }} value={reason} onChange={(event) => setReason(event.target.value)} />{error && <p role="alert" className="text-sm text-rose-700">{error}</p>}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={order.refundableKobo <= 0}>Record refund</Button></div></form></ModalFrame>;
 }
 
-function RestaurantPage({ data, fnbData, role, loading, onAddMenu, onNewOrder, onStatus, onAvailability, onRefund }) {
+function FnbItemWorkflow({ orders, role, userId, userLocationId, onStatus }) {
+  const work = orders.flatMap((order) => order.items.filter((item) => (
+    role !== "worker" || order.createdById === userId || item.fulfillmentLocationId === userLocationId
+      || order.originLocationId === userLocationId
+  ) && !["served", "cancelled"].includes(item.status)).map((item) => ({ order, item })));
+  return <Panel className="mt-4 overflow-hidden"><div className="border-b border-[#e8eeea] px-4 py-4"><h2 className="font-semibold">Item station progress</h2><p className="mt-1 text-xs text-[#77857d]">Food and drinks advance independently; the originating outlet records handoff after all items are ready.</p></div>{work.length ? <div className="divide-y divide-[#edf1ee]">{work.map(({ order, item }) => {
+    const next = { new: "accepted", accepted: "preparing", preparing: "ready" }[item.status];
+    const mayHandoff = item.status === "ready" && (role !== "worker" || order.originLocationId === userLocationId);
+    return <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"><div className="min-w-0"><p className="text-sm font-medium">{order.orderNumber} · {item.quantity} × {item.name}</p><p className="mt-0.5 text-xs text-[#718078]">{order.originLocationName} · {order.serviceMode === "room" ? `${order.roomLocationName} · Room ${order.roomNumber} · ${order.guestName}` : "Lounge / Bar"} · {item.fulfillmentLocationName} {item.station} · {item.status}</p></div><div className="flex gap-2">{next && (role !== "worker" || item.fulfillmentLocationId === userLocationId) && <Button className="min-h-8 px-2.5 text-xs capitalize" onClick={() => onStatus(order, item, next)}>{next === "accepted" ? "Accept & deduct stock" : next}</Button>}{mayHandoff && <Button variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => onStatus(order, item, "served")}>Record handoff</Button>}</div></div>;
+  })}</div> : <p className="p-4 text-sm text-[#718078]">No item work is assigned to this location.</p>}</Panel>;
+}
+
+function RestaurantPage({ data, fnbData, role, userId, userLocationId, loading, onAddMenu, onEditMenu, onNewOrder, onStatus, onItemStatus, onPayment, onAvailability, onRefund }) {
   const [station, setStation] = useState("all");
-  const queue = fnbData.orders.filter((order) => ["new", "accepted", "preparing", "ready", "served"].includes(order.status) && (station === "all" || order.items.some((item) => item.station === station)));
+  const [fulfillmentLocationId, setFulfillmentLocationId] = useState("all");
+  const [orderDateFilter, setOrderDateFilter] = useState("");
+  const [orderOriginFilter, setOrderOriginFilter] = useState("all");
+  const [orderSourceFilter, setOrderSourceFilter] = useState("all");
+  const [orderModeFilter, setOrderModeFilter] = useState("all");
+  const [orderStationFilter, setOrderStationFilter] = useState("all");
+  const [orderFulfillmentFilter, setOrderFulfillmentFilter] = useState("all");
+  const [orderPaymentFilter, setOrderPaymentFilter] = useState("all");
+  const [orderMethodFilter, setOrderMethodFilter] = useState("all");
+  const [orderStaffFilter, setOrderStaffFilter] = useState("all");
+  const queue = fnbData.orders.filter((order) => ["new", "accepted", "preparing", "ready", "served"].includes(order.status) && (role !== "worker" || Boolean(userLocationId && (order.createdById === userId || order.originLocationId === userLocationId || order.items.some((item) => item.fulfillmentLocationId === userLocationId)))) && order.items.some((item) => (station === "all" || item.station === station) && (role === "worker" || fulfillmentLocationId === "all" || item.fulfillmentLocationId === fulfillmentLocationId)));
+  const sourceOptions = [...new Set(fnbData.orders.map((order) => order.source).filter(Boolean))];
+  const staffOptions = [...new Map(fnbData.orders.filter((order) => order.createdById).map((order) => [order.createdById, order.createdByName])).entries()];
+  const managedOrders = fnbData.orders.filter((order) => {
+    const receipts = fnbData.payments.filter((payment) => payment.orderId === order.id);
+    return (!orderDateFilter || String(order.createdAt).slice(0, 10) === orderDateFilter)
+      && (orderOriginFilter === "all" || order.originLocationId === orderOriginFilter)
+      && (orderSourceFilter === "all" || order.source === orderSourceFilter)
+      && (orderModeFilter === "all" || order.serviceMode === orderModeFilter)
+      && (orderStationFilter === "all" || order.items.some((item) => item.station === orderStationFilter))
+      && (orderFulfillmentFilter === "all" || order.status === orderFulfillmentFilter)
+      && (orderPaymentFilter === "all" || order.paymentStatus === orderPaymentFilter)
+      && (orderMethodFilter === "all" || receipts.some((payment) => payment.method === orderMethodFilter) || order.paymentMethod === orderMethodFilter)
+      && (orderStaffFilter === "all" || order.createdById === orderStaffFilter);
+  });
+  const orderTotals = {
+    paid: managedOrders.reduce((sum, order) => sum + order.paidKobo, 0),
+    unpaid: managedOrders.filter((order) => order.paymentStatus === "unpaid").reduce((sum, order) => sum + order.totalKobo, 0),
+    partial: managedOrders.filter((order) => order.paymentStatus === "partially_paid").reduce((sum, order) => sum + order.outstandingKobo, 0),
+    refunds: managedOrders.reduce((sum, order) => sum + order.refundedKobo, 0),
+    folio: managedOrders.reduce((sum, order) => sum + order.roomFolioKobo, 0),
+    settledFolio: managedOrders.reduce((sum, order) => sum + order.settledFolioKobo, 0),
+  };
+  const paymentWorkOrders = (role === "worker" ? queue.filter((order) => order.originLocationId === userLocationId || order.createdById === userId) : managedOrders).filter((order) => order.outstandingKobo > 0 && order.status !== "cancelled");
   const categories = [...new Set(fnbData.menuItems.map((item) => item.category))];
   return <>
     <PageHeader title="Food & drink" description="Menu, kitchen/bar queue, room charges, and counter orders." action={<div className="flex gap-2">{role !== "worker" && <Button variant="secondary" onClick={onAddMenu}><Plus size={16} />Menu item</Button>}<Button onClick={onNewOrder}><Plus size={16} />New order</Button></div>} />
+    {role !== "worker" && <Panel className="mb-4 grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-4">
+      <label className="text-xs font-medium text-[#58685e]">Date<input aria-label="Filter orders by date" type="date" value={orderDateFilter} onChange={(event) => setOrderDateFilter(event.target.value)} className="mt-1 min-h-9 w-full rounded-md border border-[#dfe7e1] bg-white px-2.5 text-sm" /></label>
+      <label className="text-xs font-medium text-[#58685e]">Origin<select aria-label="Filter orders by origin" value={orderOriginFilter} onChange={(event) => setOrderOriginFilter(event.target.value)} className="mt-1 min-h-9 w-full rounded-md border border-[#dfe7e1] bg-white px-2.5 text-sm"><option value="all">All locations</option>{fnbData.locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label>
+      <label className="text-xs font-medium text-[#58685e]">Source<select aria-label="Filter orders by source" value={orderSourceFilter} onChange={(event) => setOrderSourceFilter(event.target.value)} className="mt-1 min-h-9 w-full rounded-md border border-[#dfe7e1] bg-white px-2.5 text-sm"><option value="all">All sources</option>{sourceOptions.map((source) => <option key={source} value={source}>{source.replaceAll("_", " ")}</option>)}</select></label>
+      <label className="text-xs font-medium text-[#58685e]">Destination<select aria-label="Filter orders by destination" value={orderModeFilter} onChange={(event) => setOrderModeFilter(event.target.value)} className="mt-1 min-h-9 w-full rounded-md border border-[#dfe7e1] bg-white px-2.5 text-sm"><option value="all">Room and Lounge</option><option value="room">Room</option><option value="lounge">Lounge</option></select></label>
+      <label className="text-xs font-medium text-[#58685e]">Station<select aria-label="Filter orders by station" value={orderStationFilter} onChange={(event) => setOrderStationFilter(event.target.value)} className="mt-1 min-h-9 w-full rounded-md border border-[#dfe7e1] bg-white px-2.5 text-sm"><option value="all">All stations</option><option value="kitchen">Kitchen</option><option value="bar">Bar</option></select></label>
+      <label className="text-xs font-medium text-[#58685e]">Fulfillment<select aria-label="Filter orders by fulfillment status" value={orderFulfillmentFilter} onChange={(event) => setOrderFulfillmentFilter(event.target.value)} className="mt-1 min-h-9 w-full rounded-md border border-[#dfe7e1] bg-white px-2.5 text-sm"><option value="all">All fulfillment states</option>{["new", "accepted", "preparing", "ready", "served", "billed", "cancelled"].map((status) => <option key={status} value={status}>{status.replaceAll("_", " ")}</option>)}</select></label>
+      <label className="text-xs font-medium text-[#58685e]">Payment method<select aria-label="Filter orders by payment method" value={orderMethodFilter} onChange={(event) => setOrderMethodFilter(event.target.value)} className="mt-1 min-h-9 w-full rounded-md border border-[#dfe7e1] bg-white px-2.5 text-sm"><option value="all">All methods</option>{["cash", "card", "transfer", "room_charge"].map((method) => <option key={method} value={method}>{method === "room_charge" ? "Room folio" : method}</option>)}</select></label>
+      <label className="text-xs font-medium text-[#58685e]">Responsible staff<select aria-label="Filter orders by staff member" value={orderStaffFilter} onChange={(event) => setOrderStaffFilter(event.target.value)} className="mt-1 min-h-9 w-full rounded-md border border-[#dfe7e1] bg-white px-2.5 text-sm"><option value="all">All staff</option>{staffOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
+    </Panel>}
+    {role !== "worker" && <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6"><StatCard label="Direct receipts" value={formatMoney(orderTotals.paid)} note="Cash, card, transfer" icon={CreditCard} /><StatCard label="Unpaid total" value={formatMoney(orderTotals.unpaid)} note="No receipt or folio post" icon={CircleAlert} /><StatCard label="Part-paid balance" value={formatMoney(orderTotals.partial)} note="Still outstanding" icon={FileText} /><StatCard label="Refunds" value={formatMoney(orderTotals.refunds)} note="Reversals recorded" icon={ArrowRight} /><StatCard label="Posted to room folio" value={formatMoney(orderTotals.folio)} note="Not cash received" icon={BedDouble} /><StatCard label="Settled folio" value={formatMoney(orderTotals.settledFolio)} note="Invoice paid" icon={CircleCheck} /></div>}
+    {paymentWorkOrders.length > 0 && <Panel className="mb-4 overflow-hidden"><div className="border-b border-[#e8eeea] px-4 py-3"><h2 className="text-sm font-semibold">Open payment balances</h2><p className="mt-1 text-xs text-[#77857d]">Record receipts or post eligible room charges independently of fulfillment.</p></div><div className="divide-y divide-[#edf1ee]">{paymentWorkOrders.slice(0, 8).map((order) => <div key={order.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"><div><p className="text-sm font-medium">{order.orderNumber} · {order.originLocationName}</p><p className="mt-0.5 text-xs text-[#718078]">{order.serviceMode === "room" ? `${order.roomLocationName} · Room ${order.roomNumber} · ${order.guestName}` : "Lounge / Bar walk-in"} · {order.paymentStatus.replaceAll("_", " ")}</p></div><div className="flex items-center gap-3"><strong className="text-sm">{formatMoney(order.outstandingKobo)} due</strong><Button variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => onPayment(order)}>Record payment</Button></div></div>)}</div></Panel>}
+    <div className="mb-3 flex justify-end">{role === "worker" ? <p className="text-xs text-[#718078]">Assigned location · {fnbData.locations.find((location) => location.id === userLocationId)?.name || "Unassigned · ask a manager"}</p> : <label className="text-xs font-medium text-[#58685e]">Queue location<select aria-label="Queue location" value={fulfillmentLocationId} onChange={(event) => setFulfillmentLocationId(event.target.value)} className="ml-2 min-h-9 rounded-md border border-[#dfe7e1] bg-white px-2.5 text-sm"><option value="all">All locations</option>{fnbData.locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label>}</div>
+    <FnbItemWorkflow orders={queue} role={role} userId={userId} userLocationId={userLocationId} onStatus={onItemStatus} />
     <div className="grid gap-4 xl:grid-cols-[1fr_1.2fr]">
-      <Panel><div className="border-b border-[#e8eeea] px-4 py-4"><h2 className="font-semibold">Menu</h2><p className="mt-1 text-xs text-[#77857d]">Recipes use tracked inventory; unavailable items cannot be ordered.</p></div>{loading ? <p className="p-5 text-sm">Loading menu…</p> : fnbData.menuItems.length ? <div className="divide-y divide-[#edf1ee]">{categories.map((category) => <div key={category}><h3 className="bg-[#f7f9f7] px-4 py-2 text-xs font-semibold uppercase text-[#718078]">{category}</h3>{fnbData.menuItems.filter((item) => item.category === category).map((item) => <div key={item.id} className="flex items-center gap-3 px-4 py-3"><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{item.name}</p><p className="mt-0.5 text-xs text-[#77857d]">{item.station} · {item.recipe.map((line) => `${line.name} ${line.quantity}${line.unit}`).join(", ")}</p></div><span className="text-sm font-semibold">{formatMoney(item.priceKobo)}</span>{role !== "worker" && <button onClick={() => onAvailability(item, !item.available)} className={`rounded-full px-2.5 py-1 text-xs ${item.available ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>{item.available ? "Available" : "Unavailable"}</button>}</div>)}</div>)}</div> : <EmptyPanel icon={Utensils} title="Menu is empty" detail="Add menu items with recipe ingredients to start taking orders." />}</Panel>
+      <Panel><div className="border-b border-[#e8eeea] px-4 py-4"><h2 className="font-semibold">Menu</h2><p className="mt-1 text-xs text-[#77857d]">Recipes use tracked inventory; unavailable items cannot be ordered.</p></div>{loading ? <p className="p-5 text-sm">Loading menu…</p> : fnbData.menuItems.length ? <div className="divide-y divide-[#edf1ee]">{categories.map((category) => <div key={category}><h3 className="bg-[#f7f9f7] px-4 py-2 text-xs font-semibold uppercase text-[#718078]">{category}</h3>{fnbData.menuItems.filter((item) => item.category === category).map((item) => <div key={item.id} className="flex items-center gap-3 px-4 py-3"><span className="grid size-12 shrink-0 place-items-center overflow-hidden rounded-md bg-[#edf3ee] text-[#688273]">{item.imageUrl ? <img src={item.imageUrl} alt={item.name} loading="lazy" className="size-full object-cover" /> : <Utensils size={18} />}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{item.name}</p><p className="mt-0.5 truncate text-xs text-[#77857d]">{item.recipe.length ? `${item.station} · ${item.recipe.map((line) => `${line.name} ${line.quantity}${line.unit}`).join(", ")}` : "Recipe not set up"}</p></div><span className="text-sm font-semibold">{formatMoney(item.priceKobo)}</span>{role !== "worker" && <><button onClick={() => onEditMenu(item)} title={`Edit ${item.name}`} aria-label={`Edit ${item.name}`} className="grid size-8 shrink-0 place-items-center rounded-md text-[#718078] hover:bg-[#edf5ef] hover:text-[#176b54]"><Pencil size={14} /></button><button onClick={() => onAvailability(item, !item.available)} className={`rounded-full px-2.5 py-1 text-xs ${item.available ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>{item.available ? "Available" : "Unavailable"}</button></>}</div>)}</div>)}</div> : <EmptyPanel icon={Utensils} title="Menu is empty" detail="Add menu items with recipe ingredients to start taking orders." />}</Panel>
       <Panel><div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e8eeea] px-4 py-4"><div><h2 className="font-semibold">Kitchen & bar queue</h2><p className="mt-1 text-xs text-[#77857d]">Accepting an order deducts ingredients once.</p></div><div className="flex gap-1 rounded-lg bg-[#edf2ee] p-1">{["all", "kitchen", "bar"].map((value) => <button key={value} onClick={() => setStation(value)} className={`rounded-md px-3 py-1.5 text-xs capitalize ${station === value ? "bg-white font-semibold shadow-sm" : "text-[#718078]"}`}>{value}</button>)}</div></div>{queue.length ? <div className="divide-y divide-[#edf1ee]">{queue.map((order) => <div key={order.id} className="space-y-3 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><strong className="text-sm">{order.orderNumber}</strong><Status value={order.status} /></div><p className="mt-1 text-xs text-[#718078]">{order.source.replaceAll("_", " ")} · {order.unitId ? `Room ${unitFor(data, order.unitId)?.number || "—"}` : "Counter"} · {new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p></div><strong className="text-sm">{formatMoney(order.totalKobo)}</strong></div><div className="space-y-1">{order.items.filter((item) => station === "all" || item.station === station).map((item) => <p key={item.id} className="text-sm">{item.quantity} × {item.name}{item.modifiers.length ? <span className="text-xs text-[#718078]"> · {item.modifiers.map((modifier) => modifier.name).join(", ")}</span> : null}</p>)}</div><div className="flex flex-wrap gap-2">{({ new: ["accepted"], accepted: ["preparing"], preparing: ["ready"], ready: ["served"], served: ["billed"] })[order.status]?.map((next) => <Button key={next} className="min-h-8 px-2.5 text-xs capitalize" onClick={() => onStatus(order, next)}>{next === "accepted" ? "Accept & deduct stock" : next === "billed" ? "Bill / take payment" : next}</Button>)}{order.status === "billed" && role !== "worker" && <Button variant="danger" className="min-h-8 px-2.5 text-xs" onClick={() => onRefund(order)}>Refund</Button>}{order.status !== "billed" && order.status !== "cancelled" && (order.status === "new" || role !== "worker") && <Button variant="quiet" className="min-h-8 px-2.5 text-xs" onClick={() => onStatus(order, "cancelled")}>Cancel</Button>}</div></div>)}</div> : <EmptyPanel icon={ClipboardList} title="Queue is clear" detail="New orders will appear here for the kitchen and bar." />}</Panel>
     </div>
+    {role !== "worker" && <Panel className="mt-4 overflow-hidden"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e8eeea] px-4 py-4"><div><h2 className="font-semibold">All orders</h2><p className="mt-1 text-xs text-[#77857d]">Fulfillment and payment are tracked separately across the property.</p></div><select aria-label="Filter orders by payment status" value={orderPaymentFilter} onChange={(event) => setOrderPaymentFilter(event.target.value)} className="min-h-9 rounded-md border border-[#dfe7e1] bg-white px-3 text-sm"><option value="all">All payment states</option><option value="unpaid">Unpaid</option><option value="partially_paid">Partially paid</option><option value="paid">Paid</option><option value="room_folio">Posted to room folio</option><option value="partially_refunded">Partially refunded</option><option value="refunded">Refunded</option></select></div><div className="overflow-x-auto"><DataTable columns={[
+      { key: "order", label: "Order", render: (order) => <span className="font-medium">{order.orderNumber}</span> },
+      { key: "origin", label: "Origin", render: (order) => order.serviceMode === "room" ? `${order.roomLocationName} · Room ${order.roomNumber} · ${order.guestName}` : `${order.originLocationName} · Lounge · ${order.guestName || "Walk-in"}` },
+      { key: "items", label: "Items", render: (order) => order.items.map((item) => `${item.quantity} × ${item.name}`).join(", ") },
+      { key: "fulfillment", label: "Fulfillment", render: (order) => <Status value={order.status} /> },
+      { key: "payment", label: "Payment", render: (order) => <span className={order.paymentStatus === "paid" ? "font-medium text-emerald-700" : order.paymentStatus === "unpaid" ? "font-medium text-rose-700" : "font-medium text-amber-700"}>{order.paymentStatus.replaceAll("_", " ")}</span> },
+      { key: "methods", label: "Receipts / method", render: (order) => { const entries = fnbData.payments.filter((payment) => payment.orderId === order.id); return entries.length ? entries.map((payment) => `${payment.method === "room_charge" ? "Folio" : payment.method} ${formatMoney(payment.amountKobo)} · ${payment.reference || "No reference"} · ${new Intl.DateTimeFormat("en-NG", { dateStyle: "short", timeStyle: "short", timeZone: "Africa/Lagos" }).format(new Date(payment.createdAt))} · ${payment.createdByName}`).join("; ") : "No receipt"; } },
+      { key: "staff", label: "Responsible staff", render: (order) => order.createdByName },
+      { key: "paid", label: "Direct paid", render: (order) => formatMoney(order.paidKobo) },
+      { key: "folio", label: "Room folio", render: (order) => formatMoney(order.roomFolioKobo) },
+      { key: "folioSettled", label: "Folio settled", render: (order) => formatMoney(order.settledFolioKobo) },
+      { key: "due", label: "Outstanding", render: (order) => order.paymentStatus === "room_folio" ? "On room folio" : formatMoney(order.outstandingKobo) },
+      { key: "total", label: "Total", render: (order) => formatMoney(order.totalKobo) },
+      { key: "refund", label: "", render: (order) => order.refundableKobo > 0 ? <Button variant="secondary" className="min-h-8 px-2.5 text-xs" onClick={() => onRefund(order)}>Refund</Button> : null },
+    ]} rows={managedOrders} empty="No orders match this payment filter." /></div></Panel>}
   </>;
 }
 
-function InventoryPage({ data, role, search, onSearch, onCreate, onStock, batches = [], minibarMovements = [] }) {
+function InventoryPage({ data, role, search, onSearch, onCreate, onStock, onSetLocation, batches = [], minibarMovements = [] }) {
   const rows = data.inventory.filter((item) =>
     `${item.name} ${item.category} ${item.supplierId}`
       .toLowerCase()
@@ -2902,6 +3091,16 @@ function InventoryPage({ data, role, search, onSearch, onCreate, onStock, batche
               ),
             },
             { key: "category", label: "Category" },
+            {
+              key: "location",
+              label: "Transfer stock",
+              render: (item) => allowed(role, "stock") ? (
+                <select aria-label={`Transfer ${item.name} stock location`} value={item.locationId || ""} onChange={(event) => { const nextLocationId = event.target.value; const nextLocation = data.locations.find((location) => location.id === nextLocationId); if (nextLocationId !== item.locationId && window.confirm(`Transfer all ${item.quantity} ${item.unit} of ${item.name} to ${nextLocation?.name}? Both sides of the transfer will be recorded.`)) onSetLocation(item, nextLocationId); }} className="min-h-8 max-w-44 rounded-md border border-[#dfe7e1] bg-white px-2 text-xs">
+                  <option value="" disabled>Unassigned</option>
+                  {data.locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+                </select>
+              ) : item.locationName || "Unassigned",
+            },
             {
               key: "quantity",
               label: "On hand",
@@ -3620,7 +3819,85 @@ function FinancialsPage({ data, fnbData, role, onCreate, onExpenseAction }) {
   );
 }
 
-function MessagesPage({ data, onSend, onRead }) {
+function StaffMessagesPanel({ data, role, currentUserId, selectedStaffId, onSelectStaff, onSend, onCreate, onEdit, onDelete }) {
+  const [query, setQuery] = useState("");
+  const contacts = data.users.filter((user) => user.active && (
+    role === "worker" ? ["manager", "ceo"].includes(user.role) : user.role === "worker"
+  )).filter((user) => `${user.name} ${user.email}`.toLowerCase().includes(query.toLowerCase()));
+  const activeContact = contacts.find((user) => user.id === selectedStaffId) || contacts[0];
+  const messages = activeContact ? data.staffMessages?.[activeContact.id] || [] : [];
+  const [draft, setDraft] = useState("");
+
+  function send(event) {
+    event.preventDefault();
+    if (draft.trim() && activeContact) {
+      onSend(activeContact.id, draft.trim());
+      setDraft("");
+    }
+  }
+
+  return (
+    <Panel className="grid min-h-[620px] overflow-hidden lg:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="border-b border-[#e7ede9] p-3 lg:border-b-0 lg:border-r">
+        <div className="flex items-center justify-between gap-2 px-1 py-2">
+          <div>
+            <h2 className="text-sm font-semibold text-[#35443b]">Staff directory</h2>
+            <p className="text-xs text-[#7c8981]">{contacts.length} {role === "worker" ? "managers" : "workers"}</p>
+          </div>
+          {role !== "worker" && <button type="button" onClick={onCreate} title="Add worker" aria-label="Add worker" className="grid size-9 place-items-center rounded-lg text-[#176b54] hover:bg-[#edf5ef]"><Plus size={17} /></button>}
+        </div>
+        <SearchBox value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search team members" />
+        {contacts.map((user) => (
+          <div key={user.id} className={`mt-2 flex items-center gap-2 rounded-lg p-2 ${activeContact?.id === user.id ? "bg-[#edf5ef]" : "hover:bg-[#f7f9f7]"}`}>
+            <button type="button" onClick={() => onSelectStaff(user.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+              <span className="relative grid size-9 shrink-0 place-items-center rounded-full bg-[#e4f0e7] text-xs font-semibold text-[#27694f]">
+                {initials(user.name)}
+                {user.online && <span className="absolute bottom-0 right-0 size-2.5 rounded-full border-2 border-white bg-emerald-500" />}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-[#35443b]">{user.name}</span>
+                <span className="block text-xs text-[#7c8981]">{user.online ? "Online" : "Offline"}</span>
+              </span>
+            </button>
+            {role !== "worker" && user.role === "worker" && <>
+              <button type="button" onClick={() => onEdit(user)} title={`Edit ${user.name}`} aria-label={`Edit ${user.name}`} className="grid size-8 place-items-center rounded-md text-[#718078] hover:bg-white hover:text-[#176b54]"><Pencil size={14} /></button>
+              <button type="button" onClick={() => onDelete(user)} title={`Delete ${user.name}`} aria-label={`Delete ${user.name}`} className="grid size-8 place-items-center rounded-md text-[#718078] hover:bg-rose-50 hover:text-rose-700"><Trash2 size={14} /></button>
+            </>}
+          </div>
+        ))}
+      </div>
+      {activeContact ? (
+        <div className="flex min-h-[520px] flex-col">
+          <div className="flex items-center gap-3 border-b border-[#e7ede9] px-4 py-3">
+            <span className="relative grid size-9 place-items-center rounded-full bg-[#e4f0e7] text-xs font-semibold text-[#27694f]">
+              {initials(activeContact.name)}
+              {activeContact.online && <span className="absolute bottom-0 right-0 size-2.5 rounded-full border-2 border-white bg-emerald-500" />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-[#35443b]">{activeContact.name}</p>
+              <p className="text-xs text-[#7c8981]">{activeContact.online ? "Online now" : "Offline"} · {activeContact.email}</p>
+            </div>
+          </div>
+          <div className="flex-1 space-y-3 overflow-y-auto bg-[#fbfcfb] p-4">
+            {messages.length ? messages.map((message) => (
+              <div key={message.id} className={`max-w-[82%] rounded-xl px-3.5 py-2.5 text-sm ${message.senderId === currentUserId ? "ml-auto bg-[#eaf58a] text-[#303b11]" : "bg-white text-[#425148] shadow-sm ring-1 ring-[#e8eeea]"}`}>
+                <p className="whitespace-pre-wrap break-words">{message.text}</p>
+                <p className="mt-1 text-right text-[10px] opacity-60">{new Intl.DateTimeFormat("en-NG", { hour: "2-digit", minute: "2-digit" }).format(new Date(message.createdAt))}</p>
+              </div>
+            )) : <EmptyPanel icon={MessageCircle} title="Start a staff conversation" detail={`Send a message to ${activeContact.name}.`} />}
+          </div>
+          <form onSubmit={send} className="flex gap-2 border-t border-[#e7ede9] p-3">
+            <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={`Message ${activeContact.name}`} className="min-w-0 flex-1 rounded-lg border border-[#dfe7e1] px-3 text-sm outline-none focus:border-[#70a38d]" />
+            <Button type="submit" disabled={!draft.trim()}><Send size={16} />Send</Button>
+          </form>
+        </div>
+      ) : <EmptyPanel icon={Users} title="No team members to message" detail="Active team members will appear here." />}
+    </Panel>
+  );
+}
+
+function MessagesPage({ data, role, currentUserId, selectedStaffId, onSelectStaff, onSend, onRead, onSendStaff, onCreateStaff, onEditStaff, onDeleteStaff }) {
+  const [mode, setMode] = useState(selectedStaffId ? "staff" : "guest");
   const [activeId, setActiveId] = useState(data.conversations[0]?.id);
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
@@ -3648,8 +3925,23 @@ function MessagesPage({ data, onSend, onRead }) {
     <>
       <PageHeader
         title="Messages"
-        description="Guest conversations linked to their current booking."
+        description={mode === "staff" ? "Direct conversations with your team." : "Guest conversations linked to their current booking."}
+        action={<div className="inline-flex rounded-lg border border-[#dfe7e1] bg-white p-1" role="tablist" aria-label="Message type">
+          <button type="button" role="tab" aria-selected={mode === "guest"} onClick={() => setMode("guest")} className={`rounded-md px-3 py-1.5 text-sm ${mode === "guest" ? "bg-[#176b54] text-white" : "text-[#718078] hover:bg-[#f2f6f3]"}`}>Guests</button>
+          <button type="button" role="tab" aria-selected={mode === "staff"} onClick={() => setMode("staff")} className={`rounded-md px-3 py-1.5 text-sm ${mode === "staff" ? "bg-[#176b54] text-white" : "text-[#718078] hover:bg-[#f2f6f3]"}`}>Staff</button>
+        </div>}
       />
+      {mode === "staff" ? <StaffMessagesPanel
+        data={data}
+        role={role}
+        currentUserId={currentUserId}
+        selectedStaffId={selectedStaffId}
+        onSelectStaff={onSelectStaff}
+        onSend={onSendStaff}
+        onCreate={onCreateStaff}
+        onEdit={onEditStaff}
+        onDelete={onDeleteStaff}
+      /> : (
       <Panel className="grid min-h-[620px] overflow-hidden lg:grid-cols-[320px_minmax(0,1fr)]">
         <div className="border-b border-[#e7ede9] p-3 lg:border-b-0 lg:border-r">
           <SearchBox
@@ -3740,6 +4032,7 @@ function MessagesPage({ data, onSend, onRead }) {
           />
         )}
       </Panel>
+      )}
     </>
   );
 }
@@ -3933,7 +4226,7 @@ function ConciergePage({ data, onCreate, onRequestAction }) {
   );
 }
 
-function TeamPage({ data, role, onCreate, onSettings, onUserToggle, onSetPassword }) {
+function TeamPage({ data, role, onCreate, onSettings, onUserToggle, onSetPassword, onEditUser, onDeleteUser, onChatUser }) {
   return (
     <>
       <PageHeader
@@ -3975,10 +4268,29 @@ function TeamPage({ data, role, onCreate, onSettings, onUserToggle, onSetPasswor
                 label: "Role",
                 render: (user) => <Status value={user.role} />,
               },
+              { key: "location", label: "Work location", render: (user) => user.locationName || "Unassigned" },
+              {
+                key: "presence",
+                label: "Presence",
+                render: (user) => user.online ? (
+                  <span className="inline-flex items-center gap-2 text-xs font-medium text-emerald-700"><span className="size-2 rounded-full bg-emerald-500" />Online</span>
+                ) : <span className="inline-flex items-center gap-2 text-xs text-[#839087]"><span className="size-2 rounded-full bg-[#b8c2bc]" />Offline</span>,
+              },
               {
                 key: "active",
                 label: "Account",
                 render: (user) => <div className="flex items-center gap-2"><Status value={user.active ? "available" : "cancelled"} />{["ceo", "manager"].includes(role) && <button onClick={() => onSetPassword(user)} className="text-xs font-medium text-[#176b54] hover:underline">Set password</button>}{role === "ceo" && <button onClick={() => onUserToggle(user)} className="text-xs font-medium text-[#176b54] hover:underline">{user.active ? "Deactivate" : "Activate"}</button>}</div>,
+              },
+              {
+                key: "actions",
+                label: "",
+                render: (user) => ["ceo", "manager"].includes(role) && user.role === "worker" ? (
+                  <div className="flex items-center gap-1">
+                    <button type="button" onClick={() => onChatUser(user)} title={`Chat with ${user.name}`} aria-label={`Chat with ${user.name}`} className="grid size-8 place-items-center rounded-md text-[#176b54] hover:bg-[#edf5ef]"><MessageCircle size={15} /></button>
+                    <button type="button" onClick={() => onEditUser(user)} title={`Edit ${user.name}`} aria-label={`Edit ${user.name}`} className="grid size-8 place-items-center rounded-md text-[#718078] hover:bg-[#f2f6f3]"><Pencil size={14} /></button>
+                    <button type="button" onClick={() => onDeleteUser(user)} title={`Delete ${user.name}`} aria-label={`Delete ${user.name}`} className="grid size-8 place-items-center rounded-md text-[#718078] hover:bg-rose-50 hover:text-rose-700"><Trash2 size={14} /></button>
+                  </div>
+                ) : null,
               },
             ]}
             rows={data.users}
@@ -4175,6 +4487,7 @@ function App() {
   const [role, setRole] = useState("worker");
   const [currentUserId, setCurrentUserId] = useState("");
   const [currentUserName, setCurrentUserName] = useState("");
+  const [selectedStaffId, setSelectedStaffId] = useState("");
   const [signedIn, setSignedIn] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -4187,10 +4500,14 @@ function App() {
   const [roomsLoading, setRoomsLoading] = useState(true);
   const [roomsError, setRoomsError] = useState("");
   const [lagosClock, setLagosClock] = useState(getLagosDateTime);
-  const [fnbData, setFnbData] = useState({ categories: [], menuItems: [], orders: [], batches: [], minibarMovements: [] });
+  const [fnbData, setFnbData] = useState({ locations: [], categories: [], menuItems: [], orders: [], payments: [], batches: [], minibarMovements: [] });
   const [fnbLoading, setFnbLoading] = useState(true);
   const [systemNotifications, setSystemNotifications] = useState([]);
   const [restockRequests, setRestockRequests] = useState([]);
+  const defaultStaffId = data.users.find((user) => user.active && (
+    role === "worker" ? ["manager", "ceo"].includes(user.role) : user.role === "worker"
+  ))?.id || "";
+  const staffThreadUserId = selectedStaffId || defaultStaffId;
 
   useEffect(() => {
     let cancelled = false;
@@ -4208,6 +4525,51 @@ function App() {
       .finally(() => { if (!cancelled) setAuthLoading(false); });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!signedIn) return undefined;
+    let cancelled = false;
+    async function sendHeartbeat() {
+      try {
+        const response = await fetch("/api/presence", { method: "POST" });
+        if (!response.ok) return;
+        const { onlineUserIds } = await response.json();
+        if (cancelled) return;
+        const onlineIds = new Set(onlineUserIds);
+        setData((current) => ({
+          ...current,
+          users: current.users.map((user) => ({ ...user, online: onlineIds.has(user.id) })),
+        }));
+      } catch {
+        // Presence is best-effort and should not interrupt the staff workflow.
+      }
+    }
+    void sendHeartbeat();
+    const timer = window.setInterval(() => { void sendHeartbeat(); }, 30000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [signedIn]);
+
+  useEffect(() => {
+    if (!signedIn || page !== "messages" || !staffThreadUserId) return undefined;
+    let cancelled = false;
+    async function refreshStaffThread() {
+      try {
+        const response = await fetch(`/api/staff-messages/${encodeURIComponent(staffThreadUserId)}`);
+        if (!response.ok) return;
+        const messages = await response.json();
+        if (cancelled) return;
+        setData((current) => ({
+          ...current,
+          staffMessages: { ...current.staffMessages, [staffThreadUserId]: messages },
+        }));
+      } catch {
+        // Keep the last successful thread while reconnecting.
+      }
+    }
+    void refreshStaffThread();
+    const timer = window.setInterval(() => { void refreshStaffThread(); }, 10000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [signedIn, page, staffThreadUserId]);
 
   useEffect(() => {
     document.title = isPropertyWebsite
@@ -4333,6 +4695,8 @@ function App() {
           id: room.id,
           name: room.name,
           number: room.number,
+          locationId: room.locationId,
+          locationName: room.locationName,
           roomTypeId: room.roomTypeId,
           floor: room.floor || "—",
           status: room.status,
@@ -4416,6 +4780,8 @@ function App() {
           id: room.id,
           name: room.name,
           number: room.number,
+          locationId: room.locationId,
+          locationName: room.locationName,
           roomTypeId: room.roomTypeId,
           floor: room.floor || "—",
           status: room.status,
@@ -4503,6 +4869,20 @@ function App() {
     if (result.batch) setFnbData((current) => ({ ...current, batches: [result.batch, ...current.batches] }));
     return result;
   }
+  async function transferInventoryLocation(item, locationId) {
+    try {
+      const updated = await writeApi(`/api/inventory/${encodeURIComponent(item.id)}/location`, "PATCH", { locationId });
+      updateList("inventory", (items) => items.map((entry) => entry.id === updated.id ? updated : entry));
+      const operationsResponse = await fetch("/api/operations");
+      if (operationsResponse.ok) {
+        const operations = await operationsResponse.json();
+        setData((current) => ({ ...current, stockMovements: operations.stockMovements }));
+      }
+      notify(`${item.quantity} ${item.unit} of ${item.name} transferred to ${updated.locationName}.`);
+    } catch (error) {
+      notify(error.message);
+    }
+  }
   async function refreshPersistentOperations() {
     const [response, fnbResponse, reservationsResponse, workspaceResponse, restockResponse] = await Promise.all([
       fetch("/api/operations"),
@@ -4541,13 +4921,17 @@ function App() {
       auditLogs: mergeById(current.auditLogs, workspace.auditLogs),
     }));
   }
-  async function saveMenuItem(payload) {
+  async function saveMenuItem(payload, record = null) {
     if (!allowed(role, "stock")) return { error: "Only managers and admins can create menu items." };
     try {
-      const item = await writeApi("/api/fnb/menu-items", "POST", payload);
+      const item = record
+        ? await writeApi(`/api/fnb/menu-items/${encodeURIComponent(record.id)}`, "PATCH", payload)
+        : await writeApi("/api/fnb/menu-items", "POST", payload);
       setFnbData((current) => ({
         ...current,
-        menuItems: [...current.menuItems, item],
+        menuItems: record
+          ? current.menuItems.map((entry) => entry.id === item.id ? item : entry)
+          : [...current.menuItems, item],
         categories: current.categories.some((category) => category.name.toLowerCase() === item.category.toLowerCase())
           ? current.categories
           : [...current.categories, { id: item.categoryId, name: item.category, station: item.station }],
@@ -4568,6 +4952,31 @@ function App() {
     }
   }
   async function updateFnbOrder(order, status) {
+    if (status === "billed") {
+      setModal({ type: "fnbPayment", record: order });
+      return;
+    }
+    if (role === "worker" && ["accepted", "preparing", "ready", "served"].includes(status)) {
+      const priorStatus = { accepted: "new", preparing: "accepted", ready: "preparing", served: "ready" }[status];
+      const items = order.items.filter((item) => item.status === priorStatus && (
+        status === "served" ? order.originLocationId === currentUser.locationId
+          : item.fulfillmentLocationId === currentUser.locationId
+      ));
+      if (!items.length) {
+        notify("Use the item station progress controls for work assigned to your location.");
+        return;
+      }
+      for (const item of items) {
+        try {
+          await writeApi(`/api/fnb/orders/${encodeURIComponent(order.id)}/items/${encodeURIComponent(item.id)}/status`, "PATCH", { status });
+        } catch (error) {
+          notify(error.message);
+          return;
+        }
+      }
+      await refreshPersistentOperations();
+      return;
+    }
     try {
       await writeApi(`/api/fnb/orders/${encodeURIComponent(order.id)}/status`, "PATCH", {
         status,
@@ -4577,6 +4986,25 @@ function App() {
       notify(`${order.orderNumber} ${status === "billed" ? "billed" : `moved to ${status}`}.`);
     } catch (error) {
       notify(error.message);
+    }
+  }
+  async function updateFnbItem(order, item, status) {
+    try {
+      await writeApi(`/api/fnb/orders/${encodeURIComponent(order.id)}/items/${encodeURIComponent(item.id)}/status`, "PATCH", { status });
+      await refreshPersistentOperations();
+      notify(`${item.name} ${status === "served" ? "handoff recorded" : `moved to ${status}`}.`);
+    } catch (error) {
+      notify(error.message);
+    }
+  }
+  async function recordFnbPayment(order, values) {
+    try {
+      await writeApi(`/api/fnb/orders/${encodeURIComponent(order.id)}/payments`, "POST", values);
+      await refreshPersistentOperations();
+      notify(`${order.orderNumber} payment recorded.`);
+      return {};
+    } catch (error) {
+      return { error: error.message };
     }
   }
   async function updateMenuAvailability(item, available) {
@@ -4626,6 +5054,8 @@ function App() {
         id: result.id,
         name: result.name,
         number: result.number,
+        locationId: result.locationId,
+        locationName: result.locationName,
         roomTypeId: result.roomTypeId,
         floor: result.floor || "—",
         status: result.status,
@@ -4856,7 +5286,7 @@ function App() {
     const requiredPermission = {
       booking: "booking", guest: "booking", unit: "inspect", roomType: "inspect", rateRule: "inspect",
       task: "inspect", request: "concierge", item: "inspect", purchase: "purchase",
-      stock: "stock", stockOut: "stock_use", stockAdjust: "stock", expense: "expense",
+      stock: "stock", stockOut: "stock_use", stockAdjust: "stock", expense: "expense", editUser: "manage_team",
       user: "manage_team", setPassword: "all", refund: "refund", voidInvoice: "cancel",
     }[type];
     if (requiredPermission && !allowed(role, requiredPermission)) {
@@ -5457,7 +5887,18 @@ function App() {
         notify(error.message);
         return;
       }
-      updateList("users", (items) => [user, ...items]);
+      updateList("users", (items) => [{ ...user, online: false }, ...items]);
+    } else if (type === "editUser") {
+      let user;
+      try {
+        user = await writeApi(`/api/users/${encodeURIComponent(record.id)}`, "PUT", values);
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
+      updateList("users", (items) => items.map((item) => item.id === user.id ? { ...item, ...user } : item));
+      setModal(null);
+      notify(`${user.name}'s details were updated.`);
     } else if (type === "setPassword") {
       try {
         await writeApi(`/api/users/${encodeURIComponent(record.id)}/password`, "PUT", { password: values.password });
@@ -5945,6 +6386,22 @@ function App() {
     );
     notify("Message saved.");
   }
+  async function sendStaffMessage(userId, text) {
+    let message;
+    try {
+      message = await writeApi(`/api/staff-messages/${encodeURIComponent(userId)}`, "POST", { body: text });
+    } catch (error) {
+      notify(error.message);
+      return;
+    }
+    setData((current) => ({
+      ...current,
+      staffMessages: {
+        ...current.staffMessages,
+        [userId]: [...(current.staffMessages[userId] || []), message],
+      },
+    }));
+  }
   async function markConversationRead(conversationId) {
     const conversation = data.conversations.find((item) => item.id === conversationId);
     if (conversation?.databaseConversation) {
@@ -5994,6 +6451,19 @@ function App() {
     }
     updateList("users", (items) => items.map((item) => item.id === user.id ? saved : item));
     notify(`${user.name} ${saved.active ? "activated" : "deactivated"}.`);
+  }
+  async function deleteUser(user) {
+    if (!["ceo", "manager"].includes(role) || user.role !== "worker") return;
+    if (!window.confirm(`Delete ${user.name}'s worker account? Their audit history will be retained.`)) return;
+    try {
+      await writeApi(`/api/users/${encodeURIComponent(user.id)}`, "DELETE");
+    } catch (error) {
+      notify(error.message);
+      return;
+    }
+    updateList("users", (items) => items.filter((item) => item.id !== user.id));
+    if (selectedStaffId === user.id) setSelectedStaffId("");
+    notify(`${user.name}'s account was deleted.`);
   }
   async function issueInvoice(invoice) {
     if (invoice.databaseInvoice) {
@@ -6047,6 +6517,7 @@ function App() {
     id: currentUserId,
     name: currentUserName,
     role,
+    locationId: "",
   };
   const visibleNavGroups = navGroups
     .map((group) => ({
@@ -6175,6 +6646,8 @@ function App() {
           restockRequests={restockRequests}
           userName={currentUser.name}
           role={role}
+          userId={currentUser.id}
+          userLocationId={currentUser.locationId}
           onNavigate={navigate}
           onCreate={requestCreate}
           onBookingAction={bookingAction}
@@ -6256,10 +6729,14 @@ function App() {
           data={data}
           fnbData={fnbData}
           role={role}
+          userLocationId={currentUser.locationId}
           loading={fnbLoading}
           onAddMenu={(preset = null) => setModal({ type: "fnbMenu", record: preset })}
+          onEditMenu={(item) => setModal({ type: "fnbMenu", record: item, edit: true })}
           onNewOrder={() => setModal({ type: "fnbOrder" })}
           onStatus={updateFnbOrder}
+          onItemStatus={updateFnbItem}
+          onPayment={(order) => setModal({ type: "fnbPayment", record: order })}
           onAvailability={updateMenuAvailability}
           onRefund={(order) => setModal({ type: "fnbRefund", record: order })}
         />
@@ -6275,6 +6752,7 @@ function App() {
           onCreate={requestCreate}
           batches={fnbData.batches}
           minibarMovements={fnbData.minibarMovements}
+          onSetLocation={transferInventoryLocation}
           onStock={(type, item) => {
             const permission = ["stockOut", "minibar"].includes(type) ? "stock_use" : "stock";
             if (!allowed(role, permission)) {
@@ -6368,7 +6846,19 @@ function App() {
         );
       break;
     case "messages":
-      content = <MessagesPage data={data} onSend={sendMessage} onRead={markConversationRead} />;
+      content = <MessagesPage
+        data={data}
+        role={role}
+        currentUserId={currentUserId}
+        selectedStaffId={selectedStaffId}
+        onSelectStaff={setSelectedStaffId}
+        onSend={sendMessage}
+        onRead={markConversationRead}
+        onSendStaff={sendStaffMessage}
+        onCreateStaff={() => requestCreate("user")}
+        onEditStaff={(user) => requestCreate("editUser", user)}
+        onDeleteStaff={deleteUser}
+      />;
       break;
     case "reviews":
       content = (
@@ -6396,6 +6886,9 @@ function App() {
           onSettings={settingsSave}
           onUserToggle={toggleUser}
           onSetPassword={(user) => setModal({ type: "setPassword", record: user })}
+          onEditUser={(user) => requestCreate("editUser", user)}
+          onDeleteUser={deleteUser}
+          onChatUser={(user) => { setSelectedStaffId(user.id); setPage("messages"); }}
         />
       );
       break;
@@ -6636,15 +7129,18 @@ function App() {
         </div>
       )}
       {modal?.type === "fnbMenu" ? (
-        <MenuItemDialog data={data} preset={modal.record} onClose={() => setModal(null)} onSave={saveMenuItem} />
+        <MenuItemDialog data={data} preset={modal.edit ? null : modal.record} record={modal.edit ? modal.record : null} onClose={() => setModal(null)} onSave={saveMenuItem} />
       ) : modal?.type === "fnbOrder" ? (
-        <FnbOrderDialog data={data} fnbData={fnbData} onClose={() => setModal(null)} onSave={createFnbOrder} />
+        <FnbOrderDialog data={data} fnbData={fnbData} role={role} userLocationId={currentUser.locationId} onClose={() => setModal(null)} onSave={createFnbOrder} />
+      ) : modal?.type === "fnbPayment" ? (
+        <FnbPaymentDialog order={modal.record} onClose={() => setModal(null)} onSave={recordFnbPayment} />
       ) : modal?.type === "fnbRefund" ? (
         <FnbRefundDialog order={modal.record} onClose={() => setModal(null)} onSave={refundFnbOrder} />
       ) : modal?.type === "roomEditor" ? (
         <RoomEditorDialog
           key={modal.record?.id || "new-room"}
           room={modal.record}
+          locations={fnbData.locations}
           onClose={() => setModal(null)}
           onSave={saveRoom}
         />

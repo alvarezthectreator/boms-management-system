@@ -115,21 +115,23 @@ test("public room endpoint bypasses auth middleware", async () => {
   database.close();
 });
 
-function headers(role = "worker", name = "Test User", idempotencyKey = "", userId = "") {
+function headers(role = "worker", name = "Test User", idempotencyKey = "", userId = "", locationId = "") {
   return {
     "x-test-role": role,
     "x-test-user-name": name,
     ...(userId ? { "x-test-user-id": userId } : {}),
+    ...(locationId ? { "x-test-user-location": locationId } : {}),
     ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}),
   };
 }
 
 async function createCashFnbOrder(app, extra = {}, idempotencyKey = "create-cash-order") {
+  const locationId = extra.serviceMode === "room" ? "location-building-1" : "location-bar";
   const created = await app.call("POST", "/api/fnb/orders", {
-    headers: headers("worker", "Test User", idempotencyKey),
-    body: { items: [{ menuItemId: "menu-rice", quantity: 2 }], paymentMethod: "cash", ...extra },
+    headers: headers("worker", "Test User", idempotencyKey, "", locationId),
+    body: { items: [{ menuItemId: "menu-rice", quantity: 2 }], paymentMethod: "cash", originLocationId: locationId, ...extra },
   });
-  assert.equal(created.code, 201);
+  assert.equal(created.code, 201, JSON.stringify(created.body));
   return created.body;
 }
 
@@ -143,41 +145,156 @@ test("F&B acceptance deducts recipe stock exactly once", async () => {
   assert.equal(order.serviceKobo, 0);
   assert.equal(order.taxKobo, 0);
   assert.equal(order.totalKobo, order.subtotalKobo - order.discountKobo);
-  const accepted = await app.call("PATCH", `/api/fnb/orders/${order.id}/status`, {
-    headers: headers(), body: { status: "accepted" },
+  const item = order.items[0];
+  const kitchen = headers("worker", "Kitchen", "", "kitchen-user", "location-building-2");
+  const accepted = await app.call("PATCH", `/api/fnb/orders/${order.id}/items/${item.id}/status`, {
+    headers: kitchen, body: { status: "accepted" },
   });
   assert.equal(accepted.code, 200);
   assert.equal(database.prepare("SELECT qty FROM inventory_items WHERE id = 'stock-rice'").get().qty, 4);
   assert.equal(database.prepare("SELECT count(*) AS count FROM stock_movements WHERE ref = ?").get(order.id).count, 1);
-  assert.equal(database.prepare("SELECT user_id FROM audit_logs WHERE entity_id = ? AND action = 'accepted'").get(order.id).user_id, "test-worker");
+  assert.equal(database.prepare("SELECT user_id FROM audit_logs WHERE entity_id = ? AND action = 'accepted'").get(item.id).user_id, "kitchen-user");
 
   const retry = await app.call("POST", "/api/fnb/orders", {
-    headers: headers("worker", "Test User", "create-cash-order"),
-    body: { items: [{ menuItemId: "menu-rice", quantity: 2 }], paymentMethod: "cash" },
+    headers: headers("worker", "Test User", "create-cash-order", "", "location-bar"),
+    body: { items: [{ menuItemId: "menu-rice", quantity: 2 }], paymentMethod: "cash", originLocationId: "location-bar" },
   });
   assert.equal(retry.code, 200);
   assert.equal(retry.body.id, order.id);
   assert.equal(database.prepare("SELECT count(*) AS count FROM fnb_orders").get().count, 1);
 
-  const repeated = await app.call("PATCH", `/api/fnb/orders/${order.id}/status`, {
-    headers: headers(), body: { status: "accepted" },
+  const repeated = await app.call("PATCH", `/api/fnb/orders/${order.id}/items/${item.id}/status`, {
+    headers: kitchen, body: { status: "accepted" },
   });
   assert.equal(repeated.code, 409);
   assert.equal(database.prepare("SELECT qty FROM inventory_items WHERE id = 'stock-rice'").get().qty, 4);
   database.close();
 });
 
-test("cash room-service orders retain their selected room", async () => {
+test("F&B orders accept partial payments and protect payment retries", async () => {
   const database = createTestDatabase();
   const app = createRouteApp();
   seedFnb(database);
-  database.prepare("INSERT INTO units (id, property_id, number) VALUES ('room-101', ?, '101')").run(propertyId);
   registerFnbRoutes(app, database, propertyId);
 
-  const order = await createCashFnbOrder(app, { source: "room_service", unitId: "room-101", notes: "No peanuts" }, "cash-room-service-order");
+  const order = await createCashFnbOrder(app, {}, "partial-payment-order");
+  const billedAsPayment = await app.call("PATCH", `/api/fnb/orders/${order.id}/status`, {
+    headers: headers("manager", "Manager"), body: { status: "billed" },
+  });
+  assert.equal(billedAsPayment.code, 409);
+  assert.equal(database.prepare("SELECT count(*) AS count FROM fnb_order_payments WHERE order_id = ?").get(order.id).count, 0);
+  const firstAmount = Math.floor(order.totalKobo / 2);
+  const first = await app.call("POST", `/api/fnb/orders/${order.id}/payments`, {
+    headers: headers("worker", "Test User", "first-partial-payment"),
+    body: { method: "cash", amountKobo: firstAmount, reference: "CASH-001" },
+  });
+  assert.equal(first.code, 201, JSON.stringify(first.body));
+  assert.equal(first.body.amountKobo, firstAmount);
+
+  const retry = await app.call("POST", `/api/fnb/orders/${order.id}/payments`, {
+    headers: headers("worker", "Test User", "first-partial-payment"),
+    body: { method: "cash", amountKobo: firstAmount, reference: "CASH-001" },
+  });
+  assert.equal(retry.code, 200);
+  assert.equal(database.prepare("SELECT count(*) AS count FROM fnb_order_payments WHERE order_id = ?").get(order.id).count, 1);
+
+  const refreshed = await app.call("GET", "/api/fnb");
+  const savedOrder = refreshed.body.orders.find((entry) => entry.id === order.id);
+  assert.equal(savedOrder.status, "new");
+  assert.equal(savedOrder.paymentStatus, "partially_paid");
+  assert.equal(savedOrder.paidKobo, firstAmount);
+  assert.equal(savedOrder.outstandingKobo, order.totalKobo - firstAmount);
+
+  const overpayment = await app.call("POST", `/api/fnb/orders/${order.id}/payments`, {
+    headers: headers("worker", "Test User", "overpayment-attempt"),
+    body: { method: "cash", amountKobo: order.totalKobo, reference: "TOO-MUCH" },
+  });
+  assert.equal(overpayment.code, 409);
+
+  const remainder = await app.call("POST", `/api/fnb/orders/${order.id}/payments`, {
+    headers: headers("worker", "Test User", "final-partial-payment"),
+    body: { method: "transfer", amountKobo: order.totalKobo - firstAmount, reference: "BANK-002" },
+  });
+  assert.equal(remainder.code, 201);
+  const paidResponse = await app.call("GET", "/api/fnb");
+  const paidOrder = paidResponse.body.orders.find((entry) => entry.id === order.id);
+  assert.equal(paidOrder.status, "new");
+  assert.equal(paidOrder.paymentStatus, "paid");
+  assert.equal(paidOrder.outstandingKobo, 0);
+  database.close();
+});
+
+test("F&B item stations enforce fulfillment ownership and originating-outlet handoff", async () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  seedFnb(database);
+  registerFnbRoutes(app, database, propertyId);
+
+  const order = await createCashFnbOrder(app, {}, "station-handoff-order");
+  const item = order.items[0];
+  const kitchen = headers("worker", "Kitchen", "", "kitchen-user", "location-building-2");
+  const bar = headers("worker", "Bar", "", "bar-user", "location-bar");
+  const accepted = await app.call("PATCH", `/api/fnb/orders/${order.id}/items/${item.id}/status`, { headers: kitchen, body: { status: "accepted" } });
+  assert.equal(accepted.code, 200, accepted.body?.error);
+  assert.equal(database.prepare("SELECT qty FROM inventory_items WHERE id = 'stock-rice'").get().qty, 4);
+
+  const wrongStation = await app.call("PATCH", `/api/fnb/orders/${order.id}/items/${item.id}/status`, { headers: bar, body: { status: "preparing" } });
+  assert.equal(wrongStation.code, 403);
+  const preparing = await app.call("PATCH", `/api/fnb/orders/${order.id}/items/${item.id}/status`, { headers: kitchen, body: { status: "preparing" } });
+  assert.equal(preparing.body.status, "preparing");
+  const ready = await app.call("PATCH", `/api/fnb/orders/${order.id}/items/${item.id}/status`, { headers: kitchen, body: { status: "ready" } });
+  assert.equal(ready.body.status, "ready");
+  const wrongHandoff = await app.call("PATCH", `/api/fnb/orders/${order.id}/items/${item.id}/status`, { headers: kitchen, body: { status: "served" } });
+  assert.equal(wrongHandoff.code, 403);
+  const served = await app.call("PATCH", `/api/fnb/orders/${order.id}/items/${item.id}/status`, { headers: bar, body: { status: "served" } });
+  assert.equal(served.code, 200, served.body?.error);
+  assert.equal(served.body.status, "served");
+  assert.equal(database.prepare("SELECT count(*) AS count FROM stock_movements WHERE ref = ?").get(order.id).count, 1);
+  database.close();
+});
+
+test("F&B refunds allocate across partial receipts and link each reversal", async () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  seedFnb(database);
+  registerFnbRoutes(app, database, propertyId);
+  const order = await createCashFnbOrder(app, {}, "partial-refund-order");
+  const firstAmount = Math.floor(order.totalKobo / 2);
+  for (const [key, method, amountKobo] of [["refund-cash", "cash", firstAmount], ["refund-transfer", "transfer", order.totalKobo - firstAmount]]) {
+    const payment = await app.call("POST", `/api/fnb/orders/${order.id}/payments`, {
+      headers: headers("worker", "Bar", key, "bar-worker", "location-bar"),
+      body: { method, amountKobo },
+    });
+    assert.equal(payment.code, 201, payment.body?.error);
+  }
+  const originals = database.prepare("SELECT id FROM fnb_order_payments WHERE order_id = ? AND status = 'paid' ORDER BY created_at, id").all(order.id);
+  const refund = await app.call("POST", `/api/fnb/orders/${order.id}/refunds`, {
+    headers: headers("manager", "Manager", "refund-two-receipts"),
+    body: { amountKobo: firstAmount + 250, reason: "Returned items" },
+  });
+  assert.equal(refund.code, 201, refund.body?.error);
+  assert.equal(refund.body.refunds.length, 2);
+  assert.deepEqual(new Set(refund.body.refunds.map((entry) => entry.originalPaymentId)), new Set(originals.map((entry) => entry.id)));
+  assert.equal(refund.body.amount, -(firstAmount + 250));
+  const retry = await app.call("POST", `/api/fnb/orders/${order.id}/refunds`, {
+    headers: headers("manager", "Manager", "refund-two-receipts"),
+    body: { amountKobo: firstAmount + 250, reason: "Returned items" },
+  });
+  assert.equal(retry.code, 200);
+  assert.equal(database.prepare("SELECT count(*) AS count FROM fnb_order_payments WHERE order_id = ? AND status = 'refunded'").get(order.id).count, 2);
+  database.close();
+});
+
+test("cash room-service orders retain their selected room", async () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  seedFnb(database, { withBooking: true });
+  registerFnbRoutes(app, database, propertyId);
+
+  const order = await createCashFnbOrder(app, { serviceMode: "room", source: "room_service", unitId: "unit-1", bookingId: "booking-1", notes: "No peanuts" }, "cash-room-service-order");
   assert.equal(order.source, "room_service");
-  assert.equal(order.unitId, "room-101");
-  assert.equal(order.bookingId, "");
+  assert.equal(order.unitId, "unit-1");
+  assert.equal(order.bookingId, "booking-1");
   assert.equal(order.notes, "No peanuts");
   database.close();
 });
@@ -204,6 +321,30 @@ test("inventory movement audit records the authenticated actor", async () => {
   assert.equal(retry.body.movement.id, result.body.movement.id);
   assert.equal(database.prepare("SELECT qty FROM inventory_items WHERE id = 'stock-rice'").get().qty, 4);
   assert.equal(database.prepare("SELECT count(*) AS count FROM stock_movements WHERE item_id = 'stock-rice'").get().count, 1);
+  database.close();
+});
+
+test("inventory location changes record a paired stock transfer", async () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  seedFnb(database);
+  database.prepare("UPDATE inventory_items SET location_id = 'location-building-1' WHERE id = 'stock-rice'").run();
+  registerOperationsRoutes(app, database, propertyId);
+
+  const moved = await app.call("PATCH", "/api/inventory/stock-rice/location", {
+    headers: headers("manager", "Manager", "", "manager-1"),
+    body: { locationId: "location-building-2" },
+  });
+  assert.equal(moved.code, 200, moved.body?.error);
+  assert.equal(moved.body.locationId, "location-building-2");
+  const movements = database.prepare("SELECT type, qty, location_id, ref FROM stock_movements ORDER BY type").all();
+  assert.equal(movements.length, 2);
+  assert.deepEqual(movements.map((movement) => [movement.type, movement.qty, movement.location_id]), [
+    ["in", 5, "location-building-2"],
+    ["out", 5, "location-building-1"],
+  ]);
+  assert.equal(movements[0].ref, movements[1].ref);
+  assert.equal(database.prepare("SELECT action FROM audit_logs WHERE entity = 'inventory_item'").get().action, "location_transferred");
   database.close();
 });
 
@@ -269,6 +410,29 @@ test("minibar consumption retry posts stock and movement once", async () => {
   database.close();
 });
 
+test("Building 1 staff can create and see a room order for a Building 2 guest", async () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  seedFnb(database, { withBooking: true });
+  database.prepare("INSERT INTO units (id, property_id, number, location_id) VALUES (?, ?, ?, ?)")
+    .run("unit-2", propertyId, "201", "location-building-2");
+  database.prepare("INSERT INTO bookings (id, property_id, guest_id, unit_id, status, subtotal_kobo, total_kobo) VALUES (?, ?, ?, ?, 'checked_in', 5000, 5000)")
+    .run("booking-2", propertyId, "guest-1", "unit-2");
+  registerFnbRoutes(app, database, propertyId);
+
+  const created = await app.call("POST", "/api/fnb/orders", {
+    headers: headers("worker", "Building 1 Front Desk", "building-2-room-order", "front-desk-1", "location-building-1"),
+    body: { items: [{ menuItemId: "menu-rice", quantity: 1 }], serviceMode: "room", unitId: "unit-2", bookingId: "booking-2", paymentMethod: "cash" },
+  });
+  assert.equal(created.code, 201, created.body?.error);
+  assert.equal(created.body.roomLocationName, "Building 2");
+  assert.equal(created.body.guestName, "Guest One");
+
+  const read = await app.call("GET", "/api/fnb", { headers: headers("worker", "Building 1 Front Desk", "", "front-desk-1", "location-building-1") });
+  assert.ok(read.body.orders.some((order) => order.id === created.body.id));
+  database.close();
+});
+
 test("lounge orders save a personal guest name and cash payment method", async () => {
   const database = createTestDatabase();
   const app = createRouteApp();
@@ -277,7 +441,8 @@ test("lounge orders save a personal guest name and cash payment method", async (
 
   const order = await createCashFnbOrder(app, { source: "lounge", guestName: "Lounge guest" });
 
-  assert.equal(order.source, "lounge");
+  assert.equal(order.source, "bar");
+  assert.equal(order.serviceMode, "lounge");
   assert.equal(order.guestName, "Lounge guest");
   assert.equal(order.paymentMethod, "cash");
   database.close();
@@ -431,6 +596,64 @@ test("manager can update menu items and menu availability recalculates from stoc
   database.close();
 });
 
+test("menu recipes cannot consume inventory assigned to another location", async () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  seedFnb(database);
+  registerFnbRoutes(app, database, propertyId);
+  const result = await app.call("POST", "/api/fnb/menu-items", {
+    headers: headers("manager", "Manager"),
+    body: {
+      name: "Bar snack",
+      category: "Bar food",
+      station: "kitchen",
+      fulfillmentLocationId: "location-bar",
+      priceKobo: 500,
+      recipe: [{ inventoryItemId: "stock-rice", quantity: 0.25 }],
+    },
+  });
+  assert.equal(result.code, 400);
+  assert.match(result.body.error, /fulfillment location/i);
+  database.close();
+});
+
+test("managers can save food photos as HTTPS URLs and reject insecure URLs", async () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  seedFnb(database);
+  registerFnbRoutes(app, database, propertyId);
+  const headersForManager = headers("manager", "Manager");
+
+  const saved = await app.call("POST", "/api/fnb/menu-items", {
+    headers: headersForManager,
+    body: {
+      name: "Jollof rice",
+      category: "Main course",
+      station: "kitchen",
+      priceKobo: 250000,
+      imageUrl: "https://images.example.test/jollof.webp",
+      recipe: [{ inventoryItemId: "stock-rice", quantity: 1 }],
+    },
+  });
+  assert.equal(saved.code, 201, saved.body?.error);
+  assert.equal(saved.body.imageUrl, "https://images.example.test/jollof.webp");
+  assert.equal(database.prepare("SELECT image_url FROM menu_items WHERE id = ?").get(saved.body.id).image_url, saved.body.imageUrl);
+
+  const rejected = await app.call("POST", "/api/fnb/menu-items", {
+    headers: headersForManager,
+    body: {
+      name: "Unsafe image",
+      category: "Main course",
+      station: "kitchen",
+      priceKobo: 250000,
+      imageUrl: "http://images.example.test/jollof.webp",
+      recipe: [{ inventoryItemId: "stock-rice", quantity: 1 }],
+    },
+  });
+  assert.equal(rejected.code, 400);
+  database.close();
+});
+
 test("menu price and recipe changes do not alter historical order snapshots", async () => {
   const database = createTestDatabase();
   const app = createRouteApp();
@@ -462,18 +685,23 @@ test("billed room-charge order updates the folio without cash payment", async ()
   seedFnb(database, { withBooking: true });
   registerFnbRoutes(app, database, propertyId);
   const created = await app.call("POST", "/api/fnb/orders", {
-    headers: headers("worker", "Test User", "room-charge-order"),
+    headers: headers("worker", "Test User", "room-charge-order", "front-desk-1", "location-building-1"),
     body: {
       items: [{ menuItemId: "menu-rice", quantity: 1 }],
-      paymentMethod: "room_charge", bookingId: "booking-1", unitId: "unit-1",
+      serviceMode: "room", paymentMethod: "room_charge", bookingId: "booking-1", unitId: "unit-1",
     },
   });
   assert.equal(created.code, 201);
   const order = created.body;
-  for (const status of ["accepted", "preparing", "ready", "served", "billed"]) {
-    const result = await app.call("PATCH", `/api/fnb/orders/${order.id}/status`, { headers: headers(), body: { status } });
+  const item = order.items[0];
+  for (const status of ["accepted", "preparing", "ready"]) {
+    const result = await app.call("PATCH", `/api/fnb/orders/${order.id}/items/${item.id}/status`, { headers: headers("worker", "Kitchen", "", "kitchen-user", "location-building-2"), body: { status } });
     assert.equal(result.code, 200, result.body?.error);
   }
+  const handoff = await app.call("PATCH", `/api/fnb/orders/${order.id}/items/${item.id}/status`, { headers: headers("worker", "Front Desk", "", "frontdesk-1", "location-building-1"), body: { status: "served" } });
+  assert.equal(handoff.code, 200, handoff.body?.error);
+  const payment = await app.call("POST", `/api/fnb/orders/${order.id}/payments`, { headers: headers("worker", "Front Desk", "room-folio-payment", "frontdesk-1", "location-building-1"), body: { method: "room_charge", amountKobo: order.totalKobo } });
+  assert.equal(payment.code, 201, payment.body?.error);
 
   assert.equal(order.serviceKobo, 0);
   assert.equal(order.taxKobo, 0);
@@ -481,6 +709,21 @@ test("billed room-charge order updates the folio without cash payment", async ()
   assert.equal(database.prepare("SELECT total_kobo FROM bookings WHERE id = 'booking-1'").get().total_kobo, 6000);
   assert.equal(database.prepare("SELECT method FROM fnb_order_payments WHERE order_id = ?").get(order.id).method, "room_charge");
   assert.equal(database.prepare("SELECT count(*) AS count FROM payments").get().count, 0);
+  const refund = await app.call("POST", `/api/fnb/orders/${order.id}/refunds`, {
+    headers: headers("manager", "Manager", "room-folio-partial-refund"),
+    body: { amountKobo: 400, reason: "Meal adjustment" },
+  });
+  assert.equal(refund.code, 201, refund.body?.error);
+  assert.equal(database.prepare("SELECT total_kobo FROM invoices WHERE id = 'invoice-1'").get().total_kobo, 5600);
+  assert.equal(database.prepare("SELECT total_kobo FROM bookings WHERE id = 'booking-1'").get().total_kobo, 5600);
+  const frontDesk = headers("worker", "Front Desk", "", "frontdesk-1", "location-building-1");
+  const posted = await app.call("GET", "/api/fnb", { headers: frontDesk });
+  assert.equal(posted.body.orders.find((entry) => entry.id === order.id).roomFolioKobo, 600);
+  database.prepare("UPDATE invoices SET paid_kobo = total_kobo, status = 'paid' WHERE id = 'invoice-1'").run();
+  const settled = await app.call("GET", "/api/fnb", { headers: frontDesk });
+  const settledOrder = settled.body.orders.find((entry) => entry.id === order.id);
+  assert.equal(settledOrder.roomFolioKobo, 0);
+  assert.equal(settledOrder.settledFolioKobo, 600);
   database.close();
 });
 
@@ -639,7 +882,7 @@ test("managers can create worker accounts but cannot grant management roles", as
 
   const worker = await app.call("POST", "/api/users", {
     headers: headers("manager", "Manager"),
-    body: { name: "Front Desk", email: "frontdesk@example.test", role: "worker", password: "a-long-temporary-password" },
+    body: { name: "Front Desk", email: "frontdesk@example.test", role: "worker", locationId: "location-building-1", password: "a-long-temporary-password" },
   });
   const manager = await app.call("POST", "/api/users", {
     headers: headers("manager", "Manager"),
@@ -648,8 +891,67 @@ test("managers can create worker accounts but cannot grant management roles", as
 
   assert.equal(worker.code, 201, worker.body?.error);
   assert.equal(worker.body.role, "worker");
+  assert.equal(worker.body.locationName, "Building 1");
   assert.equal(manager.code, 403);
   assert.equal(database.prepare("SELECT count(*) AS count FROM users").get().count, 1);
+  database.close();
+});
+
+test("managers can edit, message, and delete workers while presence stays current", async () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  database.prepare("INSERT INTO users (id, property_id, name, email, role, active, last_seen_at) VALUES (?, ?, ?, ?, ?, 1, ?)")
+    .run("manager-1", propertyId, "Manager", "manager@example.test", "manager", new Date().toISOString());
+  database.prepare("INSERT INTO users (id, property_id, name, email, role, active, location_id) VALUES (?, ?, ?, ?, ?, 1, ?)")
+    .run("worker-1", propertyId, "Front Desk", "frontdesk@example.test", "worker", "location-building-1");
+  database.prepare("INSERT INTO users (id, property_id, name, email, role, active) VALUES (?, ?, ?, ?, ?, 1)")
+    .run("worker-2", propertyId, "Night Desk", "nightdesk@example.test", "worker");
+  registerWorkspaceRoutes(app, database, propertyId);
+
+  const managerHeaders = headers("manager", "Manager", "", "manager-1");
+  const listed = await app.call("GET", "/api/workspace", { headers: managerHeaders });
+  assert.equal(listed.body.users.find((user) => user.id === "manager-1").online, true);
+  assert.equal(listed.body.users.find((user) => user.id === "worker-1").online, false);
+
+  const heartbeat = await app.call("POST", "/api/presence", { headers: managerHeaders });
+  assert.ok(heartbeat.body.onlineUserIds.includes("manager-1"));
+
+  const edited = await app.call("PUT", "/api/users/worker-1", {
+    headers: managerHeaders,
+    body: { name: "Front Desk Lead", email: "lead@example.test", locationId: "location-bar" },
+  });
+  assert.equal(edited.code, 200, edited.body?.error);
+  assert.equal(edited.body.name, "Front Desk Lead");
+  assert.equal(edited.body.locationId, "location-bar");
+
+  const sent = await app.call("POST", "/api/staff-messages/worker-1", {
+    headers: managerHeaders,
+    body: { body: "Welcome to the team." },
+  });
+  assert.equal(sent.code, 201, sent.body?.error);
+  const received = await app.call("GET", "/api/staff-messages/manager-1", {
+    headers: headers("worker", "Front Desk", "", "worker-1"),
+  });
+  assert.equal(received.body.length, 1);
+  assert.equal(received.body[0].text, "Welcome to the team.");
+  assert.ok(received.body[0].readAt);
+
+  const peerDenied = await app.call("POST", "/api/staff-messages/worker-2", {
+    headers: headers("worker", "Front Desk", "", "worker-1"),
+    body: { body: "Worker-to-worker chat is restricted." },
+  });
+  assert.equal(peerDenied.code, 404);
+
+  const deleted = await app.call("DELETE", "/api/users/worker-1", { headers: managerHeaders });
+  assert.equal(deleted.code, 200, deleted.body?.error);
+  assert.ok(database.prepare("SELECT deleted_at FROM users WHERE id = 'worker-1'").get().deleted_at);
+  assert.equal(database.prepare("SELECT count(*) AS count FROM staff_messages WHERE sender_id = 'manager-1'").get().count, 1);
+
+  const denied = await app.call("PUT", "/api/users/manager-1", {
+    headers: managerHeaders,
+    body: { name: "Changed Manager", email: "changed@example.test" },
+  });
+  assert.equal(denied.code, 404);
   database.close();
 });
 
@@ -741,6 +1043,36 @@ test("password login creates an HttpOnly session and rejects missing or incorrec
   }
   const loginAfterRepeatedFailures = await app.call("POST", "/api/auth/login", { body: { email: "desk@example.test", password: "unused-password" } });
   assert.equal(loginAfterRepeatedFailures.code, 200);
+  database.close();
+});
+
+test("Building 1, kitchen, and bar workers can keep separate sessions concurrently", async () => {
+  const database = createTestDatabase();
+  const app = createRouteApp();
+  const staff = [
+    ["worker-b1", "Front Desk", "frontdesk@example.test", "location-building-1"],
+    ["worker-kitchen", "Kitchen", "kitchen@example.test", "location-building-2"],
+    ["worker-bar", "Bar", "bar@example.test", "location-bar"],
+  ];
+  for (const [id, name, email, locationId] of staff) {
+    database.prepare("INSERT INTO users (id, property_id, name, email, role, active, password_hash, location_id) VALUES (?, ?, ?, ?, 'worker', 1, ?, ?)")
+      .run(id, propertyId, name, email, hashPassword("a-long-worker-password"), locationId);
+  }
+  registerAuthRoutes(app, database, propertyId);
+  const logins = [];
+  for (const [, , email] of staff) {
+    logins.push(await app.call("POST", "/api/auth/login", { body: { email, password: "a-long-worker-password" } }));
+  }
+  assert.ok(logins.every((result) => result.code === 200));
+  const cookies = logins.map((result) => result.headers["set-cookie"].split(";")[0]);
+  assert.equal(new Set(cookies).size, 3);
+  assert.equal(database.prepare("SELECT count(*) AS count FROM auth_sessions WHERE property_id = ?").get(propertyId).count, 3);
+  const identities = [];
+  for (const cookie of cookies) {
+    const me = await app.call("GET", "/api/auth/me", { headers: { cookie } });
+    identities.push(me.body.user.id);
+  }
+  assert.deepEqual(new Set(identities), new Set(staff.map(([id]) => id)));
   database.close();
 });
 
