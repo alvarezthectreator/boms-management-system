@@ -12,6 +12,16 @@ function sendError(response, error) {
   response.status(error.status || 500).json({ error: error.message || "Request failed." });
 }
 
+function readJsonValue(value, fallback) {
+  if (value == null || value === "") return fallback;
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
 function requireRole(request, response, roles) {
   if (!roles.includes(request.user?.role)) {
     response.status(403).json({ error: "Your role cannot perform this action." });
@@ -219,7 +229,7 @@ async function readFnb(database, propertyId, user = null) {
         fulfillmentLocationName: line.fulfillment_location_name || "Unassigned",
         quantity: Number(line.qty),
         unitPriceKobo: Number(line.unit_price_kobo),
-        modifiers: JSON.parse(line.modifiers_json || "[]"),
+        modifiers: readJsonValue(line.modifiers_json, []),
         status: line.item_status,
       })),
       databaseOrder: true,
@@ -590,7 +600,7 @@ export function registerFnbRoutes(app, database, propertyId) {
           const nextQty = Number(update.quantity);
           if (!Number.isInteger(nextQty) || nextQty <= 0) throw problem("Order item quantities must be positive whole numbers.", 400);
           const delta = nextQty - originalQty;
-          const recipe = JSON.parse(line.recipe_snapshot_json || "[]");
+          const recipe = readJsonValue(line.recipe_snapshot_json, []);
           if (delta > 0 && order.status === "accepted") {
             for (const ingredient of recipe) {
               const needed = Number(ingredient.quantity) * delta;
@@ -657,7 +667,7 @@ export function registerFnbRoutes(app, database, propertyId) {
           const lines = await transaction.all("SELECT * FROM fnb_order_items WHERE order_id = ? AND property_id = ? AND deleted_at IS NULL", [order.id, propertyId]);
           for (const line of lines) {
             if (line.stock_posted) continue;
-            for (const ingredient of JSON.parse(line.recipe_snapshot_json || "[]")) {
+            for (const ingredient of readJsonValue(line.recipe_snapshot_json, [])) {
               await consumeStock(transaction, propertyId, ingredient.inventoryItemId, Number(ingredient.quantity), order.id, `F&B order ${order.order_number}`, line.fulfillment_location_id);
             }
             await transaction.run("UPDATE fnb_order_items SET stock_posted = 1, item_status = 'accepted', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [line.id]);
@@ -670,7 +680,7 @@ export function registerFnbRoutes(app, database, propertyId) {
           } else if (["accepted", "preparing", "ready"].includes(order.status)) {
             for (const line of lines) {
               if (!line.stock_posted) continue;
-              for (const ingredient of JSON.parse(line.recipe_snapshot_json || "[]")) {
+              for (const ingredient of readJsonValue(line.recipe_snapshot_json, [])) {
                 await transaction.run("UPDATE inventory_items SET qty = qty + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?", [Number(ingredient.quantity), ingredient.inventoryItemId, propertyId]);
                 await transaction.run("INSERT INTO stock_movements (id, property_id, item_id, type, qty, reason, ref, location_id, created_at, updated_at) VALUES (?, ?, ?, 'in', ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
                   [`MOV-${crypto.randomUUID()}`, propertyId, ingredient.inventoryItemId, Number(ingredient.quantity), `Cancelled order reversal ${order.order_number}`, order.id, line.fulfillment_location_id]);
@@ -738,7 +748,7 @@ export function registerFnbRoutes(app, database, propertyId) {
           await transaction.run("UPDATE fnb_order_items SET item_status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?", [line.id]);
         } else {
           if (status === "accepted" && !line.stock_posted) {
-            for (const ingredient of JSON.parse(line.recipe_snapshot_json || "[]")) {
+            for (const ingredient of readJsonValue(line.recipe_snapshot_json, [])) {
               await consumeStock(transaction, propertyId, ingredient.inventoryItemId, Number(ingredient.quantity), order.id, `F&B order ${order.order_number}`, line.fulfillment_location_id);
             }
             await transaction.run("UPDATE fnb_order_items SET stock_posted = 1, item_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [status, line.id]);
