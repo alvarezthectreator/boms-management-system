@@ -699,7 +699,7 @@ app.patch("/api/reservations/:id/status", async (request, response) => {
           amountKobo: refund.amount_kobo,
           reference: refund.reference,
           status: refund.status,
-          paidAt: refund.paid_at?.slice(0, 10) || "",
+          paidAt: refund.paid_at ? new Date(refund.paid_at).toISOString().slice(0, 10) : "",
           databasePayment: true,
         })),
       };

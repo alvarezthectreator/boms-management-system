@@ -938,7 +938,7 @@ export function registerFnbRoutes(app, database, propertyId) {
         }
         await auditAsync(transaction, propertyId, "inventory_item", item.id, "physical_count", item, { counted: count, variance, reason }, request.user?.id);
         const updated = await transaction.get("SELECT * FROM inventory_items WHERE id = ?", [item.id]);
-        return { item: { id: updated.id, name: updated.name, category: updated.category, unit: updated.unit, quantity: updated.qty, minimum: updated.min_qty, costKobo: updated.cost_kobo, supplierId: updated.supplier_id || "", databaseItem: true }, movement: movement && { id: movement.id, itemId: movement.item_id, type: movement.type, quantity: movement.qty, reason: movement.reason, date: movement.created_at.slice(0, 10), databaseMovement: true }, variance };
+        return { item: { id: updated.id, name: updated.name, category: updated.category, unit: updated.unit, quantity: updated.qty, minimum: updated.min_qty, costKobo: updated.cost_kobo, supplierId: updated.supplier_id || "", databaseItem: true }, movement: movement && { id: movement.id, itemId: movement.item_id, type: movement.type, quantity: movement.qty, reason: movement.reason, date: new Date(movement.created_at).toISOString().slice(0, 10), databaseMovement: true }, variance };
       });
       response.json(result);
     } catch (error) {

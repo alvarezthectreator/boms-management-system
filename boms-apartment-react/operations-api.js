@@ -5,6 +5,11 @@ import { readIdempotencyAsync, saveIdempotencyAsync } from "./idempotency.js";
 const nowSql = "CURRENT_TIMESTAMP";
 const managerRoles = ["manager", "ceo"];
 
+function dateOnly(value) {
+  if (!value) return "";
+  return value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+}
+
 function fail(message, status = 400) {
   return Object.assign(new Error(message), { status });
 }
@@ -71,7 +76,7 @@ function mapMovement(row) {
     type: row.type || row.title || "Maintenance",
     quantity: row.qty,
     reason: row.reason,
-    date: row.created_at?.slice(0, 10),
+    date: dateOnly(row.created_at),
     databaseMovement: true,
   };
 }
@@ -125,7 +130,7 @@ function mapPayment(row) {
     amountKobo: row.amount_kobo,
     reference: row.reference || "",
     status: row.status,
-    paidAt: row.paid_at?.slice(0, 10) || "",
+    paidAt: dateOnly(row.paid_at),
     databasePayment: true,
   };
 }
@@ -200,7 +205,7 @@ async function readOperations(database, propertyId) {
     quantity: row.qty,
     costKobo: row.cost_kobo,
     status: row.status,
-    date: row.ordered_at.slice(0, 10),
+    date: dateOnly(row.ordered_at),
     expiryDate: row.expiry_date || "",
     receivedAt: row.received_at || "",
     databasePurchaseOrder: true,
@@ -1079,7 +1084,7 @@ export function registerOperationsRoutes(app, database, propertyId) {
         if (status === "approved") {
           await transaction.run("UPDATE purchase_orders SET status = 'approved', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?", [order.id, propertyId]);
           await writeAuditAsync(transaction, propertyId, request, "purchase_order", order.id, status, order, { ...order, status });
-          return { id: order.id, supplierId: order.supplier_id, status: "approved", date: order.ordered_at.slice(0, 10), lines: lines.map((line) => ({ ...line, receivedQuantity: line.quantity })), databasePurchaseOrder: true };
+          return { id: order.id, supplierId: order.supplier_id, status: "approved", date: dateOnly(order.ordered_at), lines: lines.map((line) => ({ ...line, receivedQuantity: line.quantity })), databasePurchaseOrder: true };
         }
         if (status === "received") {
           const lineQtyMap = request.body.lineQty && typeof request.body.lineQty === "object"
@@ -1134,7 +1139,7 @@ export function registerOperationsRoutes(app, database, propertyId) {
             id: order.id,
             supplierId: order.supplier_id,
             status: nextStatus,
-            date: order.ordered_at.slice(0, 10),
+            date: dateOnly(order.ordered_at),
             lines: lines.map((line) => ({
               ...line,
               receivedQuantity: hasPartialSelection
@@ -1149,9 +1154,9 @@ export function registerOperationsRoutes(app, database, propertyId) {
         if (status === "cancelled") {
           await transaction.run("UPDATE purchase_orders SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND property_id = ?", [order.id, propertyId]);
           await writeAuditAsync(transaction, propertyId, request, "purchase_order", order.id, status, order, { ...order, status });
-          return { id: order.id, supplierId: order.supplier_id, status: "cancelled", date: order.ordered_at.slice(0, 10), lines: lines.map((line) => ({ ...line, receivedQuantity: 0 })), databasePurchaseOrder: true };
+          return { id: order.id, supplierId: order.supplier_id, status: "cancelled", date: dateOnly(order.ordered_at), lines: lines.map((line) => ({ ...line, receivedQuantity: 0 })), databasePurchaseOrder: true };
         }
-        return { id: order.id, supplierId: order.supplier_id, status: order.status, date: order.ordered_at.slice(0, 10), lines: lines.map((line) => ({ ...line, receivedQuantity: 0 })), databasePurchaseOrder: true };
+        return { id: order.id, supplierId: order.supplier_id, status: order.status, date: dateOnly(order.ordered_at), lines: lines.map((line) => ({ ...line, receivedQuantity: 0 })), databasePurchaseOrder: true };
       });
       response.json(result?.idempotentResult || result);
     } catch (error) {
