@@ -4499,6 +4499,7 @@ function App() {
   const [databaseRooms, setDatabaseRooms] = useState([]);
   const [roomsLoading, setRoomsLoading] = useState(true);
   const [roomsError, setRoomsError] = useState("");
+  const [databaseLoadError, setDatabaseLoadError] = useState("");
   const [lagosClock, setLagosClock] = useState(getLagosDateTime);
   const [fnbData, setFnbData] = useState({ locations: [], categories: [], menuItems: [], orders: [], payments: [], batches: [], minibarMovements: [] });
   const [fnbLoading, setFnbLoading] = useState(true);
@@ -4674,36 +4675,12 @@ function App() {
           fetch("/api/notifications"),
           fetch("/api/restock-requests"),
         ]);
-        const requiredResponses = [
-          ["rooms", roomsResponse],
-          ["reservations", reservationsResponse],
-          ["room blocks", blocksResponse],
-          ["operations", operationsResponse],
-          ["guests", guestsResponse],
-          ["food and drink", fnbResponse],
-          ["workspace", workspaceResponse],
-          ["notifications", notificationsResponse],
-          ["restock requests", restockResponse],
-        ];
-        const failedResponse = requiredResponses.find(([, response]) => !response.ok);
-        if (failedResponse) {
-          const [resource, response] = failedResponse;
-          throw new Error(`${resource} request failed (${response.status}). Check the server database connection and migrations.`);
+        if (!roomsResponse.ok) {
+          const result = await roomsResponse.json().catch(() => ({}));
+          throw new Error(result.error || `The room database request failed (HTTP ${roomsResponse.status}).`);
         }
         const rooms = await roomsResponse.json();
-        const reservations = await reservationsResponse.json();
-        const blocks = await blocksResponse.json();
-        const operations = await operationsResponse.json();
-        const databaseGuests = (await guestsResponse.json()).map((guest) => ({ ...guest, databaseGuest: true }));
-        const fnb = await fnbResponse.json();
-        const workspace = await workspaceResponse.json();
-        const notifications = await notificationsResponse.json();
-        const loadedRestockRequests = await restockResponse.json();
-        const allDatabaseGuests = [
-          ...databaseGuests,
-          ...reservations.filter((booking) => booking.guest).map((booking) => ({ ...booking.guest, databaseGuest: true })),
-        ];
-        if (cancelled) return;
+        if (!Array.isArray(rooms)) throw new Error("The room database returned invalid data.");
         const units = rooms.map((room) => ({
           id: room.id,
           name: room.name,
@@ -4727,11 +4704,50 @@ function App() {
           description: room.description || "",
           databaseRoomType: true,
         }));
+        if (!cancelled) {
+          setDatabaseRooms(rooms.map((room) => ({ ...room, databaseRoom: true })));
+          setRoomsError("");
+          setData((current) => ({
+            ...current,
+            units: [...current.units.filter((unit) => !unit.databaseRoom), ...units],
+            roomTypes: [...current.roomTypes.filter((type) => !type.databaseRoomType), ...roomTypes],
+          }));
+        }
+
+        const requiredResponses = [
+          ["reservations", reservationsResponse],
+          ["room blocks", blocksResponse],
+          ["operations", operationsResponse],
+          ["guests", guestsResponse],
+          ["food and drink", fnbResponse],
+          ["workspace", workspaceResponse],
+          ["notifications", notificationsResponse],
+          ["restock requests", restockResponse],
+        ];
+        const failedResponse = requiredResponses.find(([, response]) => !response.ok);
+        if (failedResponse) {
+          const [resource, response] = failedResponse;
+          throw new Error(`${resource} request failed (${response.status}). Check the server database connection and migrations.`);
+        }
+        const reservations = await reservationsResponse.json();
+        const blocks = await blocksResponse.json();
+        const operations = await operationsResponse.json();
+        const databaseGuests = (await guestsResponse.json()).map((guest) => ({ ...guest, databaseGuest: true }));
+        const fnb = await fnbResponse.json();
+        const workspace = await workspaceResponse.json();
+        const notifications = await notificationsResponse.json();
+        const loadedRestockRequests = await restockResponse.json();
+        const allDatabaseGuests = [
+          ...databaseGuests,
+          ...reservations.filter((booking) => booking.guest).map((booking) => ({ ...booking.guest, databaseGuest: true })),
+        ];
+        if (cancelled) return;
         setDatabaseRooms(rooms.map((room) => ({ ...room, databaseRoom: true })));
         setFnbData(fnb);
         setSystemNotifications(notifications);
         setRestockRequests(loadedRestockRequests);
         setRoomsError("");
+        setDatabaseLoadError("");
         setData((current) => {
           const databaseBookingIds = new Set(reservations.map((booking) => booking.id));
           return {
@@ -4762,7 +4778,7 @@ function App() {
           };
         });
       } catch (error) {
-        if (!cancelled) setRoomsError(error.message || "The room database is unavailable.");
+        if (!cancelled) setDatabaseLoadError(error.message || "Some property data could not be refreshed.");
       } finally {
         if (!cancelled) setFnbLoading(false);
         if (!cancelled) setRoomsLoading(false);
@@ -7128,6 +7144,7 @@ function App() {
             </nav>
           )}
           <main className="mx-auto w-full max-w-[1680px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+            {databaseLoadError && <div role="status" className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">Some operational data could not be refreshed: {databaseLoadError}. Room availability is loaded separately.</div>}
             {content}
           </main>
         </div>
