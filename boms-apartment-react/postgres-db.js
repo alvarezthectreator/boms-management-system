@@ -152,8 +152,23 @@ export function createPostgresDatabase(pool) {
 
 export function createPostgresPool(connectionString = process.env.DATABASE_URL) {
   if (!connectionString) throw new Error("DATABASE_URL must be configured for PostgreSQL.");
+
+  // Supabase's session pooler (port 5432) has a small per-project client cap.
+  // Vercel can create many function instances, so use the transaction pooler
+  // endpoint for Supabase pooler hosts to avoid exhausting that shared cap.
+  let effectiveConnectionString = connectionString;
+  try {
+    const parsed = new URL(connectionString);
+    if (parsed.hostname.endsWith(".pooler.supabase.com") && (!parsed.port || parsed.port === "5432")) {
+      parsed.port = "6543";
+      effectiveConnectionString = parsed.toString();
+    }
+  } catch {
+    // Let `pg` report malformed connection strings with its usual error.
+  }
+
   return new Pool({
-    connectionString,
+    connectionString: effectiveConnectionString,
     max: 1,
     idleTimeoutMillis: 1_000,
     connectionTimeoutMillis: 10_000,
