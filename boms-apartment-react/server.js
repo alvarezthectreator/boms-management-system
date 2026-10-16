@@ -16,6 +16,7 @@ import { supabaseSessionMiddleware } from "./utils/supabase/middleware.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const postgresMode = Boolean(process.env.DATABASE_URL);
+let postgresMigrationError = null;
 let database;
 if (postgresMode) {
   database = createPostgresDatabase(createPostgresPool());
@@ -125,23 +126,28 @@ if (postgresMode) {
     "019_location_workflow_postgres.sql",
     "020_auth_sessions_postgres.sql",
   ];
-  await database.withTransaction(async (transaction) => {
-    // Each Vercel API route is a separate function and can cold-start at once.
-    // Hold one database-level lock while applying the shared migrations so those
-    // simultaneous imports cannot race on schema changes.
-    await transaction.query("SELECT pg_advisory_xact_lock(1112491347, 1)");
-    for (const migration of postgresMigrations) {
-      const sql = fs.readFileSync(path.join(root, "db", migration), "utf8")
-        .replace(/^\s*BEGIN\s*;\s*/i, "")
-        .replace(/\s*COMMIT\s*;\s*$/i, "");
-      try {
-        await transaction.query(sql);
-      } catch (error) {
-        error.message = `Postgres startup migration ${migration} failed: ${error.message}`;
-        throw error;
+  try {
+    await database.withTransaction(async (transaction) => {
+      // Each Vercel API route is a separate function and can cold-start at once.
+      // Hold one database-level lock while applying the shared migrations so those
+      // simultaneous imports cannot race on schema changes.
+      await transaction.query("SELECT pg_advisory_xact_lock(1112491347, 1)");
+      for (const migration of postgresMigrations) {
+        const sql = fs.readFileSync(path.join(root, "db", migration), "utf8")
+          .replace(/^\s*BEGIN\s*;\s*/i, "")
+          .replace(/\s*COMMIT\s*;\s*$/i, "");
+        try {
+          await transaction.query(sql);
+        } catch (error) {
+          error.message = `Postgres startup migration ${migration} failed: ${error.message}`;
+          throw error;
+        }
       }
-    }
-  });
+    });
+  } catch (error) {
+    postgresMigrationError = error;
+    console.error("Postgres startup migrations failed; API is starting so unaffected routes remain available.", error);
+  }
 }
 
 const app = express();
@@ -186,7 +192,9 @@ async function listRooms() {
   const today = new Intl.DateTimeFormat("sv-SE", {
     timeZone: "Africa/Lagos",
   }).format(new Date());
-  const rows = await database.all(`
+  let rows;
+  try {
+    rows = await database.all(`
     SELECT
       units.id,
       COALESCE(NULLIF(units.name, ''), room_types.name) AS name,
@@ -211,6 +219,33 @@ async function listRooms() {
       AND room_types.deleted_at IS NULL
     ORDER BY units.name
   `, [propertyId]);
+  } catch (error) {
+    const missingLocationSchema = error.code === "42703" || error.code === "42P01" || /no such (?:column|table)/i.test(error.message || "");
+    if (!missingLocationSchema) throw error;
+    console.error("Room list is loading without optional location metadata.", error);
+    rows = await database.all(`
+      SELECT
+        units.id,
+        COALESCE(NULLIF(units.name, ''), room_types.name) AS name,
+        units.number,
+        units.floor,
+        units.status,
+        room_types.id AS room_type_id,
+        room_types.name AS room_type_name,
+        room_types.size_m2,
+        room_types.bed_type,
+        room_types.max_guests,
+        room_types.description,
+        room_types.base_rate_kobo,
+        room_types.photos_json
+      FROM units
+      JOIN room_types ON room_types.id = units.room_type_id
+      WHERE units.property_id = ?
+        AND units.deleted_at IS NULL
+        AND room_types.deleted_at IS NULL
+      ORDER BY units.name
+    `, [propertyId]);
+  }
 
   let activeReservationsByUnit = new Map();
   try {
@@ -348,7 +383,11 @@ async function writeAudit(request, entity, entityId, action, before, after, conn
 app.get("/api/health", async (_request, response) => {
   try {
     await database.get("SELECT 1 AS ok");
-    response.json({ ok: true, database: "connected" });
+    if (postgresMigrationError) {
+      response.status(503).json({ ok: false, database: "connected", migrations: "unavailable" });
+      return;
+    }
+    response.json({ ok: true, database: "connected", migrations: "ready" });
   } catch (error) {
     console.error("Database health check failed.", error);
     response.status(503).json({ ok: false, database: "unavailable" });
