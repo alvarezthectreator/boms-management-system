@@ -326,12 +326,23 @@ async function writeAudit(request, entity, entityId, action, before, after, conn
     before == null ? null : JSON.stringify(before), after == null ? null : JSON.stringify(after)]);
 }
 
-app.get("/api/health", (_request, response) => {
-  response.json({ ok: true });
+app.get("/api/health", async (_request, response) => {
+  try {
+    await database.get("SELECT 1 AS ok");
+    response.json({ ok: true, database: "connected" });
+  } catch (error) {
+    console.error("Database health check failed.", error);
+    response.status(503).json({ ok: false, database: "unavailable" });
+  }
 });
 
 app.get("/api/rooms", async (_request, response) => {
-  response.json(await listRooms());
+  try {
+    response.json(await listRooms());
+  } catch (error) {
+    console.error("Room availability query failed.", error);
+    response.status(error.status || 500).json({ error: "Room data could not be loaded." });
+  }
 });
 
 app.post("/api/rooms", async (request, response) => {

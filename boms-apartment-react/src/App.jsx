@@ -4674,8 +4674,21 @@ function App() {
           fetch("/api/notifications"),
           fetch("/api/restock-requests"),
         ]);
-        if (!roomsResponse.ok || !reservationsResponse.ok || !blocksResponse.ok || !operationsResponse.ok || !guestsResponse.ok || !fnbResponse.ok || !workspaceResponse.ok || !notificationsResponse.ok || !restockResponse.ok) {
-          throw new Error("The room database could not be loaded.");
+        const requiredResponses = [
+          ["rooms", roomsResponse],
+          ["reservations", reservationsResponse],
+          ["room blocks", blocksResponse],
+          ["operations", operationsResponse],
+          ["guests", guestsResponse],
+          ["food and drink", fnbResponse],
+          ["workspace", workspaceResponse],
+          ["notifications", notificationsResponse],
+          ["restock requests", restockResponse],
+        ];
+        const failedResponse = requiredResponses.find(([, response]) => !response.ok);
+        if (failedResponse) {
+          const [resource, response] = failedResponse;
+          throw new Error(`${resource} request failed (${response.status}). Check the server database connection and migrations.`);
         }
         const rooms = await roomsResponse.json();
         const reservations = await reservationsResponse.json();
