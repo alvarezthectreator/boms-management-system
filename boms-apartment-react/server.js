@@ -122,6 +122,7 @@ if (postgresMode) {
   await database.query(fs.readFileSync(path.join(root, "db", "015_staff_messaging_postgres.sql"), "utf8"));
   await database.query(fs.readFileSync(path.join(root, "db", "016_menu_item_images_postgres.sql"), "utf8"));
   await database.query(fs.readFileSync(path.join(root, "db", "019_location_workflow_postgres.sql"), "utf8"));
+  await database.query(fs.readFileSync(path.join(root, "db", "020_auth_sessions_postgres.sql"), "utf8"));
 }
 
 const app = express();
