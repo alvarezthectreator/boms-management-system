@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { convertPlaceholders, normalizePostgresSql } from "../postgres-db.js";
+import { convertPlaceholders, createPostgresPool, normalizePostgresSql } from "../postgres-db.js";
+
+test("serverless PostgreSQL pool defaults to one short-lived client", async () => {
+  const pool = createPostgresPool("postgres://user:password@localhost:5432/boms");
+  assert.equal(pool.options.max, 1);
+  assert.equal(pool.options.idleTimeoutMillis, 1_000);
+  assert.equal(pool.options.allowExitOnIdle, true);
+  await pool.end();
+});
 
 test("Postgres placeholder conversion ignores quoted text and comments", () => {
   const sql = "SELECT ?, '?', \"?\" -- ?\nFROM items WHERE note = ? /* ? */";

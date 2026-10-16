@@ -22,6 +22,8 @@ Staff sign in with their work email and an individual password. Passwords use No
 
 Production deployment still requires HTTPS at the public edge, a correctly configured reverse proxy, protected database/backups, monitoring, and an account recovery procedure. Set `NODE_ENV=production` and `TRUST_PROXY_HOPS` to the exact number of trusted proxy hops so secure cookies and client-address throttling work correctly. The API binds to loopback by default. Review deployment access controls before exposing the service to the internet; this project has not undergone an independent security audit.
 
+For Vercel serverless deployments backed by Supabase Postgres, configure `DATABASE_URL` with Supabase's **Transaction pooler** connection string (port `6543`), not the Session pooler. The server defaults to one PostgreSQL client per function instance (`PG_POOL_MAX=1`) to stay within Supabase's client limit. Apply the same `DATABASE_URL` configuration to Production and Preview environments as needed, then redeploy. Keep the connection string secret; never commit it or paste it into chat.
+
 ## Database safeguards
 
 Create a consistent SQLite snapshot and verify its integrity:

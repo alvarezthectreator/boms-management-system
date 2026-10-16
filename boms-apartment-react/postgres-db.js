@@ -154,8 +154,9 @@ export function createPostgresPool(connectionString = process.env.DATABASE_URL) 
   if (!connectionString) throw new Error("DATABASE_URL must be configured for PostgreSQL.");
   return new Pool({
     connectionString,
-    max: Number(process.env.PG_POOL_MAX || 3),
-    idleTimeoutMillis: 10_000,
+    max: Number(process.env.PG_POOL_MAX || 1),
+    idleTimeoutMillis: 1_000,
     connectionTimeoutMillis: 10_000,
+    allowExitOnIdle: true,
   });
 }
