@@ -115,14 +115,33 @@ if (postgresMode) {
   }
 }
 if (postgresMode) {
-  await database.query(fs.readFileSync(path.join(root, "db", "011_restock_requests_postgres.sql"), "utf8"));
-  await database.query(fs.readFileSync(path.join(root, "db", "012_housekeeping_tasks_postgres.sql"), "utf8"));
-  await database.query(fs.readFileSync(path.join(root, "db", "013_unbooked_rooms_available_postgres.sql"), "utf8"));
-  await database.query(fs.readFileSync(path.join(root, "db", "014_postgres_api_compatibility.sql"), "utf8"));
-  await database.query(fs.readFileSync(path.join(root, "db", "015_staff_messaging_postgres.sql"), "utf8"));
-  await database.query(fs.readFileSync(path.join(root, "db", "016_menu_item_images_postgres.sql"), "utf8"));
-  await database.query(fs.readFileSync(path.join(root, "db", "019_location_workflow_postgres.sql"), "utf8"));
-  await database.query(fs.readFileSync(path.join(root, "db", "020_auth_sessions_postgres.sql"), "utf8"));
+  const postgresMigrations = [
+    "011_restock_requests_postgres.sql",
+    "012_housekeeping_tasks_postgres.sql",
+    "013_unbooked_rooms_available_postgres.sql",
+    "014_postgres_api_compatibility.sql",
+    "015_staff_messaging_postgres.sql",
+    "016_menu_item_images_postgres.sql",
+    "019_location_workflow_postgres.sql",
+    "020_auth_sessions_postgres.sql",
+  ];
+  await database.withTransaction(async (transaction) => {
+    // Each Vercel API route is a separate function and can cold-start at once.
+    // Hold one database-level lock while applying the shared migrations so those
+    // simultaneous imports cannot race on schema changes.
+    await transaction.query("SELECT pg_advisory_xact_lock(1112491347, 1)");
+    for (const migration of postgresMigrations) {
+      const sql = fs.readFileSync(path.join(root, "db", migration), "utf8")
+        .replace(/^\s*BEGIN\s*;\s*/i, "")
+        .replace(/\s*COMMIT\s*;\s*$/i, "");
+      try {
+        await transaction.query(sql);
+      } catch (error) {
+        error.message = `Postgres startup migration ${migration} failed: ${error.message}`;
+        throw error;
+      }
+    }
+  });
 }
 
 const app = express();
